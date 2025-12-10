@@ -137,3 +137,9 @@ urllib3==2.3.0
 watchdog==6.0.0
     # via streamlit
 xlsxwriter
+
+# Additional dependencies for TOPPView-Lite viewer
+polars>=0.19.0
+    # via toppview-lite (for data processing)
+# streamlit-vue-components should be installed from the local package:
+# pip install -e ../streamlit_vue_components

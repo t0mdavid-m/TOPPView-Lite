@@ -1,8 +1,8 @@
 {
-    "app-name": "OpenMS WebApp Template",
+    "app-name": "TOPPView-Lite",
     "github-user": "OpenMS",
-    "version": "1.1.1",
-    "repository-name": "streamlit-template",
+    "version": "0.1.0",
+    "repository-name": "toppview-lite",
     "analytics": {
         "google-analytics": {
             "enabled": false,

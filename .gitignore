@@ -1,4 +1,5 @@
 workspaces-streamlit-template
+workspaces-toppview-lite
 build
 myenv
 build.log
@@ -11,3 +12,7 @@ python*
 **/__pycache__/
 gdpr_consent/node_modules/
 *~
+
+# Cache directories
+.cache/
+**/.cache/
