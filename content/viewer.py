@@ -141,19 +141,19 @@ state_manager = StateManager(session_key="viewer_state")
 
 # Ion Mobility table (if present)
 if im_table is not None:
-    im_table(key="im_table", state_manager=state_manager, height=180)
+    im_table(key="im_table", state_manager=state_manager, height=400)
 
 # Heatmap (full width)
-heatmap(key="heatmap", state_manager=state_manager, height=350)
+heatmap(key="heatmap", state_manager=state_manager, height=400)
 
 # Tables side by side
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    spectra_table(key="spectra_table", state_manager=state_manager, height=300)
+    spectra_table(key="spectra_table", state_manager=state_manager, height=400)
 
 with col2:
-    peaks_table(key="peaks_table", state_manager=state_manager, height=300)
+    peaks_table(key="peaks_table", state_manager=state_manager, height=400)
 
 # Spectrum plot (full width)
-spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=300)
+spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
