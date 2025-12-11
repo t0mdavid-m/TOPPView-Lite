@@ -129,3 +129,109 @@ def remove_all_mzML_files(params: dict) -> dict:
             params[k] = []
     st.success("All mzML files removed!")
     return params
+
+
+# ======================= idXML file functions =======================
+
+def save_uploaded_idXML(uploaded_files: list[bytes]) -> list[Path]:
+    """
+    Saves uploaded idXML files to the idXML directory.
+
+    Args:
+        uploaded_files: List of uploaded idXML files.
+
+    Returns:
+        List of paths to saved idXML files.
+    """
+    idxml_dir = Path(st.session_state.workspace, "idXML-files")
+    idxml_dir.mkdir(parents=True, exist_ok=True)
+
+    # A list of files is required, since online allows only single upload
+    if st.session_state.location == "online":
+        uploaded_files = [uploaded_files]
+
+    if not uploaded_files:
+        st.warning("Upload some files first.")
+        return []
+
+    saved_paths = []
+    for f in uploaded_files:
+        if f.name not in [f.name for f in idxml_dir.iterdir()] and f.name.endswith("idXML"):
+            file_path = Path(idxml_dir, f.name)
+            with open(file_path, "wb") as fh:
+                fh.write(f.getbuffer())
+            saved_paths.append(file_path)
+    st.success("Successfully added uploaded idXML files!")
+    return saved_paths
+
+
+def copy_local_idXML_files_from_directory(local_idXML_directory: str, make_copy: bool = True) -> None:
+    """
+    Copies local idXML files from a specified directory to the idXML directory.
+
+    Args:
+        local_idXML_directory: Path to the directory containing the idXML files.
+        make_copy: Whether to make a copy of the files in the workspace.
+    """
+    idxml_dir = Path(st.session_state.workspace, "idXML-files")
+    idxml_dir.mkdir(parents=True, exist_ok=True)
+
+    if not any(Path(local_idXML_directory).glob("*.idXML")):
+        st.warning("No idXML files found in specified folder.")
+        return
+
+    files = Path(local_idXML_directory).glob("*.idXML")
+    for f in files:
+        if make_copy:
+            shutil.copy(f, Path(idxml_dir, f.name))
+        else:
+            external_files = Path(idxml_dir, "external_files.txt")
+            if not external_files.exists():
+                external_files.touch()
+            with open(external_files, "a") as f_handle:
+                f_handle.write(f"{f}\n")
+
+    st.success("Successfully added local idXML files!")
+
+
+def get_idxml_files() -> list[Path]:
+    """Get list of idXML files in the workspace."""
+    idxml_dir = Path(st.session_state.workspace, "idXML-files")
+    if not idxml_dir.exists():
+        return []
+
+    files = [f for f in idxml_dir.iterdir() if f.suffix.lower() == ".idxml"]
+
+    # Check for external files
+    external_files = idxml_dir / "external_files.txt"
+    if external_files.exists():
+        with open(external_files, "r") as f_handle:
+            for line in f_handle:
+                path = Path(line.strip())
+                if path.exists():
+                    files.append(path)
+
+    return files
+
+
+def remove_selected_idXML_files(to_remove: list[str]) -> None:
+    """
+    Removes selected idXML files from the idXML directory.
+
+    Args:
+        to_remove: List of idXML file stems to remove.
+    """
+    idxml_dir = Path(st.session_state.workspace, "idXML-files")
+    for f in to_remove:
+        idxml_path = Path(idxml_dir, f + ".idXML")
+        if idxml_path.exists():
+            idxml_path.unlink()
+    st.success("Selected idXML files removed!")
+
+
+def remove_all_idXML_files() -> None:
+    """Removes all idXML files from the idXML directory."""
+    idxml_dir = Path(st.session_state.workspace, "idXML-files")
+    if idxml_dir.exists():
+        reset_directory(idxml_dir)
+    st.success("All idXML files removed!")

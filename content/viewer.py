@@ -6,15 +6,18 @@ with cross-component selection linking.
 Layout:
 - Ion Mobility table (if FAIMS data present)
 - Heatmap (peak map)
-- Spectra table | Peaks table (side by side)
+- Spectra table (with # IDs column if identifications present) | Peaks table (side by side)
 - Spectrum plot
+- Identifications table (if identifications present)
+- SequenceView (if identification selected)
 """
 
 from pathlib import Path
 
 import streamlit as st
+import polars as pl
 import pyarrow.parquet as pq
-from streamlit_vue_components import StateManager
+from streamlit_vue_components import StateManager, Table, SequenceView
 
 from src.common.common import page_setup
 from src.preprocessing import (
@@ -22,6 +25,13 @@ from src.preprocessing import (
     raw_cache_is_valid,
     component_cache_is_valid,
     load_im_info,
+)
+from src.preprocessing.identification import (
+    get_id_cache_paths,
+    id_cache_is_valid,
+    find_matching_idxml,
+    get_sequence_data_for_identification,
+    load_search_params,
 )
 from src.components import create_components
 
@@ -90,6 +100,97 @@ if file_cache_key not in st.session_state:
     num_spectra = pq.read_metadata(paths["metadata"]).num_rows
     num_peaks = pq.read_metadata(paths["peaks"]).num_rows
 
+    # Check for identification data
+    idxml_path = find_matching_idxml(selected_file, st.session_state.workspace)
+    id_df = None
+    id_table = None
+    fragment_masses_df = None
+    peak_annotations_df = None
+    search_params = None
+    id_paths = None
+    has_ids = False
+
+    if idxml_path:
+        id_paths = get_id_cache_paths(st.session_state.workspace, idxml_path)
+        if id_cache_is_valid(idxml_path, id_paths):
+            id_df = pl.read_parquet(id_paths["identifications"])
+            fragment_masses_df = pl.read_parquet(id_paths["fragment_masses"])
+            # Load search params and peak annotations if available
+            search_params = load_search_params(id_paths)
+            if id_paths["peak_annotations"].exists():
+                peak_annotations_df = pl.read_parquet(id_paths["peak_annotations"])
+            has_ids = id_df.height > 0
+
+            if has_ids:
+                # Add identification count to spectra table
+                # Count identifications per scan_id
+                id_counts = (
+                    id_df.filter(pl.col("scan_id") > 0)
+                    .group_by("scan_id")
+                    .agg(pl.len().alias("num_ids"))
+                )
+
+                # Read spectra table and join with id counts
+                spectra_df = pl.read_parquet(paths["spectra_table"])
+                spectra_df = spectra_df.join(id_counts, on="scan_id", how="left")
+                spectra_df = spectra_df.with_columns(
+                    pl.col("num_ids").fill_null(0).cast(pl.Int32)
+                )
+
+                # Recreate spectra_table with the new column
+                spectra_filters = {"im_dimension": "im_id"} if im_info.get("type") != "none" else None
+                spectra_table = Table(
+                    cache_id=f"{selected_file.stem}_spectra_table_with_ids",
+                    data=spectra_df.lazy(),
+                    cache_path=str(paths["component_cache"]),
+                    filters=spectra_filters,
+                    interactivity={"spectrum": "scan_id"},
+                    column_definitions=[
+                        {"field": "scan_id", "title": "Scan ID", "sorter": "number", "width": 80},
+                        {"field": "name", "title": "Name"},
+                        {
+                            "field": "retention_time",
+                            "title": "RT (min)",
+                            "sorter": "number",
+                            "formatter": "money",
+                            "formatterParams": {"precision": 2, "symbol": ""},
+                        },
+                        {"field": "ms_level", "title": "MS", "sorter": "number", "width": 50},
+                        {
+                            "field": "precursor_mz",
+                            "title": "Precursor m/z",
+                            "sorter": "number",
+                            "formatter": "money",
+                            "formatterParams": {"precision": 2, "symbol": ""},
+                        },
+                        {"field": "charge", "title": "z", "sorter": "number", "width": 50},
+                        {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
+                        {"field": "num_ids", "title": "# IDs", "sorter": "number", "width": 60},
+                    ],
+                    title="Spectra",
+                    index_field="scan_id",
+                    go_to_fields=["scan_id", "name"],
+                    default_row=0,
+                )
+
+                # Create identifications table component
+                id_table = Table(
+                    cache_id=f"{selected_file.stem}_ids_table",
+                    data=id_df.lazy(),
+                    cache_path=str(paths["component_cache"]),
+                    filters={"spectrum": "scan_id"},
+                    interactivity={"identification": "id_idx"},
+                    column_definitions=[
+                        {"field": "sequence", "title": "Sequence", "headerTooltip": True},
+                        {"field": "score", "title": "Score", "sorter": "number", "hozAlign": "right",
+                         "formatter": "money", "formatterParams": {"precision": 2}},
+                        {"field": "charge", "title": "z", "sorter": "number", "hozAlign": "right"},
+                        {"field": "protein_accession", "title": "Protein", "headerTooltip": True},
+                    ],
+                    index_field="id_idx",
+                    title="Identifications",
+                )
+
     st.session_state[file_cache_key] = {
         "im_table": im_table,
         "spectra_table": spectra_table,
@@ -99,6 +200,13 @@ if file_cache_key not in st.session_state:
         "im_info": im_info,
         "num_spectra": num_spectra,
         "num_peaks": num_peaks,
+        "has_ids": has_ids,
+        "id_table": id_table,
+        "id_df": id_df,
+        "fragment_masses_df": fragment_masses_df,
+        "peak_annotations_df": peak_annotations_df,
+        "search_params": search_params,
+        "paths": paths,
     }
 
 # Get cached components
@@ -111,6 +219,13 @@ heatmap = cached["heatmap"]
 im_info = cached["im_info"]
 num_spectra = cached["num_spectra"]
 num_peaks = cached["num_peaks"]
+has_ids = cached["has_ids"]
+id_table = cached["id_table"]
+id_df = cached["id_df"]
+fragment_masses_df = cached["fragment_masses_df"]
+peak_annotations_df = cached["peak_annotations_df"]
+search_params = cached["search_params"]
+paths = cached["paths"]
 
 # =============================================================================
 # Sidebar Info
@@ -121,6 +236,11 @@ with st.sidebar:
     st.write(f"**File**: {selected_file.name}")
     st.write(f"**Spectra**: {num_spectra:,}")
     st.write(f"**Peaks**: {num_peaks:,}")
+
+    if has_ids and id_df is not None:
+        num_ids = id_df.height
+        num_matched = id_df.filter(pl.col("scan_id") > 0).height
+        st.write(f"**Identifications**: {num_ids:,} ({num_matched} linked)")
 
     if im_info.get("type") != "none":
         st.write(f"**Ion Mobility**: {im_info['type'].upper()}")
@@ -146,7 +266,7 @@ if im_table is not None:
 # Heatmap (full width)
 heatmap(key="heatmap", state_manager=state_manager, height=400)
 
-# Tables side by side
+# Tables side by side: Spectra | Peaks
 col1, col2 = st.columns([1, 1])
 
 with col1:
@@ -157,3 +277,48 @@ with col2:
 
 # Spectrum plot (full width)
 spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
+
+# Identification table (below spectrum plot, only shown when IDs present)
+if has_ids:
+    id_table(key="id_table", state_manager=state_manager, height=300)
+
+# =============================================================================
+# SequenceView (if identification selected)
+# =============================================================================
+
+if has_ids and id_df is not None:
+    # Get current selection
+    current_state = state_manager.get_state_for_vue()
+    selected_id_idx = current_state.get("identification")
+
+    if selected_id_idx is not None:
+        # Find the selected identification
+        selected_rows = id_df.filter(pl.col("id_idx") == selected_id_idx)
+        if selected_rows.height > 0:
+            id_row = selected_rows.row(0, named=True)
+
+            # Get peaks for the linked spectrum
+            peaks_df = pl.read_parquet(paths["peaks"])
+            # Use cached fragment masses and pass search params/annotations
+            sequence_data, observed_masses, precursor_mass = get_sequence_data_for_identification(
+                id_row, peaks_df, fragment_masses_df, peak_annotations_df, search_params
+            )
+
+            st.markdown("---")
+            st.subheader(f"Peptide: {id_row['sequence']}")
+
+            # Render SequenceView directly without per-ID caching
+            # Fragment masses are already cached in fragment_masses.parquet
+            # Use deconvolved=False since TOPPView-Lite works with raw m/z data
+            sequence_view = SequenceView(
+                cache_id=f"{selected_file.stem}_sequence_view",  # Single cache for all IDs
+                sequence=id_row["sequence"],
+                observed_masses=observed_masses,
+                precursor_mass=precursor_mass,
+                cache_path=str(paths["component_cache"]),
+                deconvolved=False,  # m/z data, not deconvolved neutral masses
+                precursor_charge=id_row.get("charge", 2),  # Use precursor charge for max fragment charge
+                # Pass pre-computed sequence data to skip redundant calculation
+                _precomputed_sequence_data=sequence_data,
+            )
+            sequence_view(key="sequence_view", state_manager=state_manager, height=600)
