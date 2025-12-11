@@ -68,6 +68,39 @@ def id_cache_is_valid(idxml_path: Path, paths: dict) -> bool:
     )
 
 
+def sequence_to_mass_shift_format(sequence_str: str) -> str:
+    """Convert sequence with named modifications to mass shift format.
+
+    Converts e.g. 'SHC(Carbamidomethyl)IAEVEK' to 'SHC[+57.02]IAEVEK'.
+
+    Args:
+        sequence_str: Peptide sequence with named modifications (OpenMS format)
+
+    Returns:
+        Sequence with modifications shown as mass shifts [+X.XX] or [-X.XX]
+    """
+    try:
+        aa_seq = AASequence.fromString(sequence_str)
+        result = []
+
+        for i in range(aa_seq.size()):
+            residue = aa_seq.getResidue(i)
+            one_letter = residue.getOneLetterCode()
+            result.append(one_letter)
+
+            mod = residue.getModification()
+            if mod:
+                diff_mono = mod.getDiffMonoMass()
+                if diff_mono >= 0:
+                    result.append(f"[+{diff_mono:.2f}]")
+                else:
+                    result.append(f"[{diff_mono:.2f}]")
+
+        return "".join(result)
+    except Exception:
+        return sequence_str
+
+
 def calculate_peptide_mass(sequence_str: str) -> float:
     """Calculate monoisotopic mass of a peptide sequence using pyOpenMS."""
     try:
@@ -428,6 +461,7 @@ def extract_idxml_to_parquet(
 
         best_hit = hits[0]
         sequence = best_hit.getSequence().toString()
+        sequence_display = sequence_to_mass_shift_format(sequence)
         charge = best_hit.getCharge()
         score = best_hit.getScore()
         unique_sequences.add(sequence)
@@ -445,6 +479,7 @@ def extract_idxml_to_parquet(
             "rt": rt,
             "precursor_mz": mz,
             "sequence": sequence,
+            "sequence_display": sequence_display,
             "charge": charge,
             "score": score,
             "theoretical_mass": theoretical_mass,
@@ -497,6 +532,7 @@ def extract_idxml_to_parquet(
             "rt": pl.Series([], dtype=pl.Float64),
             "precursor_mz": pl.Series([], dtype=pl.Float64),
             "sequence": pl.Series([], dtype=pl.Utf8),
+            "sequence_display": pl.Series([], dtype=pl.Utf8),
             "charge": pl.Series([], dtype=pl.Int32),
             "score": pl.Series([], dtype=pl.Float64),
             "theoretical_mass": pl.Series([], dtype=pl.Float64),
@@ -675,6 +711,58 @@ def load_peak_annotations(paths: dict, id_idx: int) -> Optional[pl.DataFrame]:
         return None
 
 
+def _parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
+    """Parse OpenMS sequence format to extract residues and modification mass shifts.
+
+    Converts e.g. 'SHC(Carbamidomethyl)IAEVEK' to:
+    - residues: ['S', 'H', 'C', 'I', 'A', 'E', 'V', 'E', 'K']
+    - modifications: [None, None, 57.02, None, None, None, None, None, None]
+
+    Args:
+        sequence_str: Peptide sequence in OpenMS format with modifications in parentheses
+
+    Returns:
+        Tuple of (residues list, modifications list where None means unmodified)
+    """
+    try:
+        aa_seq = AASequence.fromString(sequence_str)
+        residues = []
+        modifications = []
+
+        for i in range(aa_seq.size()):
+            residue = aa_seq.getResidue(i)
+            one_letter = residue.getOneLetterCode()
+            residues.append(one_letter)
+
+            mod = residue.getModification()
+            if mod:
+                diff_mono = mod.getDiffMonoMass()
+                modifications.append(round(diff_mono, 2))
+            else:
+                modifications.append(None)
+
+        return residues, modifications
+    except Exception:
+        # On any error, fallback to extracting single letters
+        residues = []
+        modifications = []
+        i = 0
+        while i < len(sequence_str):
+            if sequence_str[i].isupper():
+                residues.append(sequence_str[i])
+                modifications.append(None)
+                i += 1
+            elif sequence_str[i] == '(':
+                end = sequence_str.find(')', i)
+                if end > i:
+                    i = end + 1
+                else:
+                    i += 1
+            else:
+                i += 1
+        return residues, modifications
+
+
 def get_sequence_data_for_identification(
     id_row: dict,
     peaks_df: pl.DataFrame,
@@ -698,6 +786,7 @@ def get_sequence_data_for_identification(
 
     The sequence_data dict contains:
         - sequence: List of amino acid characters
+        - modifications: List of mass shifts per position (None for unmodified)
         - theoretical_mass: Peptide mass
         - fixed_modifications: List of modifications
         - fragment_masses_[a,b,c,x,y,z]: Pre-computed fragment masses
@@ -710,13 +799,17 @@ def get_sequence_data_for_identification(
     id_idx = id_row.get("id_idx", -1)
     precursor_mass = id_row.get("theoretical_mass", 0.0)
 
+    # Parse sequence to extract residues and modification mass shifts
+    residues, modifications = _parse_openms_sequence(sequence)
+
     # Try to get pre-computed fragment masses from cache
     if fragment_masses_df is not None:
         cached_row = fragment_masses_df.filter(pl.col("sequence") == sequence)
         if cached_row.height > 0:
             row = cached_row.row(0, named=True)
             sequence_data = {
-                "sequence": list(sequence),
+                "sequence": residues,
+                "modifications": modifications,
                 "theoretical_mass": row.get("theoretical_mass", precursor_mass),
                 "fixed_modifications": [],
                 "fragment_masses_a": json.loads(row["fragment_masses_a"]),
@@ -730,7 +823,8 @@ def get_sequence_data_for_identification(
             # Fallback: compute if not in cache
             fragment_data = calculate_fragment_masses(sequence)
             sequence_data = {
-                "sequence": list(sequence),
+                "sequence": residues,
+                "modifications": modifications,
                 "theoretical_mass": precursor_mass,
                 "fixed_modifications": [],
                 **fragment_data,
@@ -739,7 +833,8 @@ def get_sequence_data_for_identification(
         # No cache provided, compute fragment masses
         fragment_data = calculate_fragment_masses(sequence)
         sequence_data = {
-            "sequence": list(sequence),
+            "sequence": residues,
+            "modifications": modifications,
             "theoretical_mass": precursor_mass,
             "fixed_modifications": [],
             **fragment_data,
@@ -764,6 +859,106 @@ def get_sequence_data_for_identification(
             observed_masses = spectrum_peaks["mass"].to_list()
 
     return sequence_data, observed_masses, id_row.get("precursor_mz", 0.0)
+
+
+PROTON_MASS = 1.007276  # Daltons
+
+
+def compute_peak_annotations_for_spectrum(
+    peaks_df: pl.DataFrame,
+    scan_id: int,
+    sequence_data: dict,
+    precursor_charge: int = 2,
+    tolerance: float = 20.0,
+    tolerance_ppm: bool = True,
+    ion_types: Optional[List[str]] = None,
+) -> Dict[float, Dict[str, Any]]:
+    """Compute fragment ion annotations for peaks in a spectrum.
+
+    Matches observed peaks against theoretical fragment masses considering
+    charge states from 1 to precursor_charge.
+
+    Args:
+        peaks_df: DataFrame with all peaks (must have scan_id, mass, intensity columns)
+        scan_id: Scan ID to filter peaks for
+        sequence_data: Dict with fragment_masses_[a,b,c,x,y,z] (from get_sequence_data_for_identification)
+        precursor_charge: Maximum charge state to consider
+        tolerance: Mass tolerance for matching
+        tolerance_ppm: If True, tolerance is in ppm; if False, in Daltons
+        ion_types: List of ion types to consider (default: ['b', 'y'])
+
+    Returns:
+        Dict mapping m/z values to annotation data:
+        {mz_value: {'highlight': True, 'annotation': 'b3¹⁺'}, ...}
+        Can be passed directly to LinePlot.set_dynamic_annotations()
+    """
+    if ion_types is None:
+        ion_types = ['b', 'y']  # Most common ion types
+
+    # Filter to spectrum peaks
+    spectrum_peaks = peaks_df.filter(pl.col("scan_id") == scan_id)
+    if spectrum_peaks.height == 0:
+        return {}
+
+    # Get observed m/z values
+    observed_mz = spectrum_peaks["mass"].to_numpy()
+
+    # Superscript digits for charge display
+    superscript = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+                   '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'}
+
+    def to_superscript(n: int) -> str:
+        return ''.join(superscript.get(d, d) for d in str(n))
+
+    # Initialize result dict: mz -> {highlight, annotation}
+    annotations_dict: Dict[float, Dict[str, Any]] = {}
+
+    # Build list of theoretical fragments with their labels
+    # Each entry: (theoretical_mz, label, ion_type, ion_number)
+    theoretical_fragments = []
+
+    for ion_type in ion_types:
+        key = f"fragment_masses_{ion_type}"
+        fragment_list = sequence_data.get(key, [])
+
+        for ion_number, masses in enumerate(fragment_list, start=1):
+            if not masses:
+                continue
+
+            # masses is a list (can have multiple for ambiguous mods)
+            for neutral_mass in masses:
+                if neutral_mass <= 0:
+                    continue
+
+                # Generate m/z for each charge state
+                for charge in range(1, precursor_charge + 1):
+                    theoretical_mz = (neutral_mass + charge * PROTON_MASS) / charge
+                    charge_str = to_superscript(charge) + "⁺"
+                    label = f"{ion_type}{ion_number}{charge_str}"
+                    theoretical_fragments.append((theoretical_mz, label, ion_type, ion_number))
+
+    # Match observed peaks to theoretical fragments
+    for frag_mz, label, ion_type, ion_number in theoretical_fragments:
+        # Find peaks within tolerance
+        if tolerance_ppm:
+            tol_da = frag_mz * tolerance / 1e6
+        else:
+            tol_da = tolerance
+
+        for obs_mz in observed_mz:
+            mass_diff = abs(obs_mz - frag_mz)
+            if mass_diff <= tol_da:
+                # Use float as key
+                mz_key = float(obs_mz)
+                if mz_key not in annotations_dict:
+                    annotations_dict[mz_key] = {'highlight': True, 'annotation': label}
+                else:
+                    # Peak already matched - append this annotation if different
+                    existing = annotations_dict[mz_key]['annotation']
+                    if label not in existing:
+                        annotations_dict[mz_key]['annotation'] = f"{existing}/{label}"
+
+    return annotations_dict
 
 
 def find_matching_idxml(mzml_path: Path, workspace: Path) -> Optional[Path]:

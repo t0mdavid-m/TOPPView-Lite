@@ -12,6 +12,7 @@ Layout:
 - SequenceView (if identification selected)
 """
 
+import hashlib
 from pathlib import Path
 
 import streamlit as st
@@ -32,6 +33,7 @@ from src.preprocessing.identification import (
     find_matching_idxml,
     get_sequence_data_for_identification,
     load_search_params,
+    compute_peak_annotations_for_spectrum,
 )
 from src.components import create_components
 
@@ -181,7 +183,7 @@ if file_cache_key not in st.session_state:
                     filters={"spectrum": "scan_id"},
                     interactivity={"identification": "id_idx"},
                     column_definitions=[
-                        {"field": "sequence", "title": "Sequence", "headerTooltip": True},
+                        {"field": "sequence_display", "title": "Sequence", "headerTooltip": True},
                         {"field": "score", "title": "Score", "sorter": "number", "hozAlign": "right",
                          "formatter": "money", "formatterParams": {"precision": 2}},
                         {"field": "charge", "title": "z", "sorter": "number", "hozAlign": "right"},
@@ -275,7 +277,65 @@ with col1:
 with col2:
     peaks_table(key="peaks_table", state_manager=state_manager, height=400)
 
-# Spectrum plot (full width)
+# =============================================================================
+# Spectrum Plot with Annotations
+# =============================================================================
+
+# Get current selection state to check if we need annotated plot
+current_state = state_manager.get_state_for_vue()
+selected_id_idx = current_state.get("identification")
+selected_scan_id = current_state.get("spectrum")
+
+print(f"[ANNOTATION DEBUG] has_ids={has_ids}, selected_id_idx={selected_id_idx}, selected_scan_id={selected_scan_id}")
+
+# Check if we should show annotated spectrum
+id_row = None
+sequence_data = None
+
+if has_ids and id_df is not None and selected_id_idx is not None:
+    # Find the selected identification
+    selected_rows = id_df.filter(pl.col("id_idx") == selected_id_idx)
+    if selected_rows.height > 0:
+        id_row = selected_rows.row(0, named=True)
+        id_scan_id = id_row.get("scan_id", -1)
+
+        # Only annotate if the spectrum matches the identification's linked spectrum
+        if id_scan_id > 0 and (selected_scan_id is None or selected_scan_id == id_scan_id):
+            # Load peaks and compute annotations
+            peaks_df = pl.read_parquet(paths["peaks"])
+
+            # Get sequence data with fragment masses
+            sequence_data, observed_masses, precursor_mass = get_sequence_data_for_identification(
+                id_row, peaks_df, fragment_masses_df, peak_annotations_df, search_params
+            )
+
+            # Get tolerance from search params
+            tolerance = search_params.get("fragment_mass_tolerance", 20.0) if search_params else 20.0
+            tolerance_ppm = search_params.get("fragment_mass_tolerance_ppm", True) if search_params else True
+
+            # Compute annotations as dict {mz: {highlight, annotation}}
+            annotations_dict = compute_peak_annotations_for_spectrum(
+                peaks_df,
+                id_scan_id,
+                sequence_data,
+                precursor_charge=id_row.get("charge", 2),
+                tolerance=tolerance,
+                tolerance_ppm=tolerance_ppm,
+            )
+
+            # Set dynamic annotations on the existing spectrum_plot
+            spectrum_plot.set_dynamic_annotations(
+                annotations=annotations_dict,
+                title=f"Mass Spectrum - {id_row['sequence_display']}"
+            )
+        else:
+            # Clear annotations if spectrum changed
+            spectrum_plot.clear_dynamic_annotations()
+else:
+    # Clear annotations when no ID selected
+    spectrum_plot.clear_dynamic_annotations()
+
+# Always render the same spectrum_plot (now with or without dynamic annotations)
 spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
 
 # Identification table (below spectrum plot, only shown when IDs present)
@@ -286,39 +346,36 @@ if has_ids:
 # SequenceView (if identification selected)
 # =============================================================================
 
-if has_ids and id_df is not None:
-    # Get current selection
-    current_state = state_manager.get_state_for_vue()
-    selected_id_idx = current_state.get("identification")
+if has_ids and id_df is not None and id_row is not None and sequence_data is not None:
+    # id_row and sequence_data already computed above
+    st.markdown("---")
+    st.subheader(f"Peptide: {id_row['sequence_display']}")
 
-    if selected_id_idx is not None:
-        # Find the selected identification
-        selected_rows = id_df.filter(pl.col("id_idx") == selected_id_idx)
-        if selected_rows.height > 0:
-            id_row = selected_rows.row(0, named=True)
+    # Get observed masses for SequenceView
+    peaks_df = pl.read_parquet(paths["peaks"])
+    scan_id = id_row.get("scan_id", -1)
+    if scan_id > 0:
+        spectrum_peaks = peaks_df.filter(pl.col("scan_id") == scan_id)
+        observed_masses = spectrum_peaks["mass"].to_list() if spectrum_peaks.height > 0 else []
+    else:
+        observed_masses = []
 
-            # Get peaks for the linked spectrum
-            peaks_df = pl.read_parquet(paths["peaks"])
-            # Use cached fragment masses and pass search params/annotations
-            sequence_data, observed_masses, precursor_mass = get_sequence_data_for_identification(
-                id_row, peaks_df, fragment_masses_df, peak_annotations_df, search_params
-            )
+    precursor_mass = id_row.get("precursor_mz", 0.0)
 
-            st.markdown("---")
-            st.subheader(f"Peptide: {id_row['sequence']}")
-
-            # Render SequenceView directly without per-ID caching
-            # Fragment masses are already cached in fragment_masses.parquet
-            # Use deconvolved=False since TOPPView-Lite works with raw m/z data
-            sequence_view = SequenceView(
-                cache_id=f"{selected_file.stem}_sequence_view",  # Single cache for all IDs
-                sequence=id_row["sequence"],
-                observed_masses=observed_masses,
-                precursor_mass=precursor_mass,
-                cache_path=str(paths["component_cache"]),
-                deconvolved=False,  # m/z data, not deconvolved neutral masses
-                precursor_charge=id_row.get("charge", 2),  # Use precursor charge for max fragment charge
-                # Pass pre-computed sequence data to skip redundant calculation
-                _precomputed_sequence_data=sequence_data,
-            )
-            sequence_view(key="sequence_view", state_manager=state_manager, height=600)
+    # Render SequenceView directly without per-ID caching
+    # Fragment masses are already cached in fragment_masses.parquet
+    # Use deconvolved=False since TOPPView-Lite works with raw m/z data
+    sequence_view = SequenceView(
+        cache_id=f"{selected_file.stem}_sequence_view",  # Single cache for all IDs
+        sequence=id_row["sequence"],
+        observed_masses=observed_masses,
+        precursor_mass=precursor_mass,
+        cache_path=str(paths["component_cache"]),
+        deconvolved=False,  # m/z data, not deconvolved neutral masses
+        precursor_charge=id_row.get("charge", 2),  # Use precursor charge for max fragment charge
+        # Pass pre-computed sequence data to skip redundant calculation
+        _precomputed_sequence_data=sequence_data,
+    )
+    # Use unique key per sequence to ensure Streamlit treats each selection as different
+    seq_hash = hashlib.md5(id_row["sequence"].encode()).hexdigest()[:8]
+    sequence_view(key=f"sequence_view_{seq_hash}", state_manager=state_manager, height=600)
