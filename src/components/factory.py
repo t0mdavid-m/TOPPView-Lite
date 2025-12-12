@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import polars as pl
-from streamlit_vue_components import Table, LinePlot, Heatmap
+from openms_insight import Table, LinePlot, Heatmap
 
 
 def create_components(

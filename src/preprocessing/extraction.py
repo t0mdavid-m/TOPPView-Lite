@@ -28,7 +28,7 @@ def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
         ├── spectrum_plot.parquet
         ├── heatmap_input.parquet
         ├── im_table.parquet
-        └── component_cache/  (for streamlit_vue_components caches)
+        └── component_cache/  (for openms_insight caches)
     """
     cache_dir = Path(workspace) / ".cache" / mzml_path.stem
     raw_dir = cache_dir / "raw"

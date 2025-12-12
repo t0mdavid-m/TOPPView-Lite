@@ -1,6 +1,6 @@
 """Interactive mzML Viewer Page.
 
-This page displays preprocessed mzML files using streamlit_vue_components
+This page displays preprocessed mzML files using openms_insight
 with cross-component selection linking.
 
 Layout:
@@ -18,7 +18,7 @@ from pathlib import Path
 import streamlit as st
 import polars as pl
 import pyarrow.parquet as pq
-from streamlit_vue_components import StateManager, Table, SequenceView
+from openms_insight import StateManager, Table, SequenceView
 
 from src.common.common import page_setup
 from src.preprocessing import (
@@ -90,8 +90,8 @@ if file_cache_key not in st.session_state:
     state_manager.clear()
 
     # Clear all render caches so new file data is sent to Vue
-    from streamlit_vue_components.rendering.bridge import _cached_prepare_vue_data, _VUE_ECHOED_HASH_KEY
-    from streamlit_vue_components.preprocessing.filtering import _cached_filter_and_collect
+    from openms_insight.rendering.bridge import _cached_prepare_vue_data, _VUE_ECHOED_HASH_KEY
+    from openms_insight.preprocessing.filtering import _cached_filter_and_collect
     _cached_prepare_vue_data.clear()
     _cached_filter_and_collect.clear()
     # Also clear the Vue hash tracking so Vue receives fresh data
