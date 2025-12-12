@@ -155,19 +155,6 @@ def create_navigation_button(emoji, title, subtitle, page_path):
         .st-key-{button_key} button:hover p {{
             color: white !important;
         }}
-
-        .st-key-{button_key} button::after {{
-            content: "{subtitle}";
-            display: block;
-            font-size: 0.9rem !important;
-            font-weight: 500 !important;
-            color: #a0a0a0 !important;
-            margin-top: 0.5rem !important;
-        }}
-
-        .st-key-{button_key} button:hover::after {{
-            color: #e0e0e0 !important;
-        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -191,7 +178,7 @@ def render_hero_section():
         )
 
     with logo_col:
-        logo_path = Path("assets/OpenMS.png")
+        logo_path = Path("assets/openms-logo.svg")
         if logo_path.exists():
             st.image(str(logo_path), width=150)
 
@@ -285,26 +272,6 @@ def render_quick_start():
         """)
 
 
-def render_footer():
-    """Render the footer section."""
-    st.markdown("---")
-
-    col1, col2, col3 = st.columns([1, 2, 1])
-
-    with col2:
-        st.markdown(
-            """
-            <div class="footer-text">
-                <p>
-                    TOPPView-Lite is part of the <a href="https://openms.de" target="_blank">OpenMS</a> ecosystem<br>
-                    Built with <a href="https://streamlit.io" target="_blank">Streamlit</a> and Vue.js
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
 def main():
     """Main function to render the welcome page."""
     inject_custom_css()
@@ -312,7 +279,6 @@ def main():
     render_navigation_buttons()
     render_features()
     render_quick_start()
-    render_footer()
 
 
 main()
