@@ -15,6 +15,7 @@ def create_components(
     paths: dict,
     im_info: dict,
     file_id: str = "",
+    has_ids: bool = False,
 ) -> Tuple[Optional[Table], Table, Table, LinePlot, Heatmap]:
     """Create all visualization components for a preprocessed file.
 
@@ -22,6 +23,7 @@ def create_components(
         paths: Dictionary of cache paths from get_cache_paths()
         im_info: Ion mobility info dict from load_im_info()
         file_id: Unique identifier for the file (used in cache IDs)
+        has_ids: Whether identification data exists (enables annotation filters)
 
     Returns:
         Tuple of (im_table, spectra_table, peaks_table, spectrum_plot, heatmap)
@@ -98,26 +100,44 @@ def create_components(
     )
 
     # Spectrum Plot
-    plot_filters = {"spectrum": "scan_id"}
-    if has_im:
-        plot_filters["im_dimension"] = "im_id"
+    # Use unified annotated data if available (has_ids and file exists)
+    annotated_path = paths["annotated_spectrum_plot"]
+    use_annotations = has_ids and annotated_path.exists()
 
-    spectrum_plot = LinePlot(
-        cache_id=f"{prefix}spectrum_plot",
-        data=pl.scan_parquet(paths["spectrum_plot"]),
-        cache_path=cache_path,
-        filters=plot_filters,
-        interactivity={"peak": "peak_id"},
-        x_column="mass",
-        y_column="intensity",
-        title="Mass Spectrum",
-        x_label="m/z",
-        y_label="Intensity",
-        styling={
+    # Build LinePlot configuration
+    plot_kwargs = {
+        "cache_id": f"{prefix}spectrum_plot",
+        "cache_path": cache_path,
+        "interactivity": {"peak": "peak_id"},
+        "x_column": "mass",
+        "y_column": "intensity",
+        "title": "Mass Spectrum",
+        "x_label": "m/z",
+        "y_label": "Intensity",
+        "styling": {
             "unhighlightedColor": "#4A90D9",
             "selectedColor": "#F3A712",
         },
-    )
+    }
+
+    if use_annotations:
+        # Use unified annotated data with identification filter
+        # Note: im_dimension filtering happens via spectra_table → spectrum selection
+        # The annotated data doesn't have im_id column, so we only filter by spectrum and identification
+        plot_kwargs["data"] = pl.scan_parquet(annotated_path)
+        plot_kwargs["filters"] = {"spectrum": "scan_id", "identification": "id_idx"}
+        plot_kwargs["filter_defaults"] = {"identification": -1}
+        plot_kwargs["highlight_column"] = "highlight"
+        plot_kwargs["annotation_column"] = "annotation"
+    else:
+        # Use basic spectrum plot data (may have im_id column)
+        plot_filters = {"spectrum": "scan_id"}
+        if has_im:
+            plot_filters["im_dimension"] = "im_id"
+        plot_kwargs["data"] = pl.scan_parquet(paths["spectrum_plot"])
+        plot_kwargs["filters"] = plot_filters
+
+    spectrum_plot = LinePlot(**plot_kwargs)
 
     # Peaks Table
     peaks_filters = {"spectrum": "scan_id"}
