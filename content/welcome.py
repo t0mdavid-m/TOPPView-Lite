@@ -102,6 +102,34 @@ def inject_custom_css():
         .footer-text a {
             color: #6b7fff;
         }
+
+        /* Download box styling */
+        .download-box {
+            background: linear-gradient(135deg, #1a2a3a 0%, #152030 100%);
+            border: 2px solid #29379b;
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            margin: 2rem 0;
+        }
+
+        .download-box-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #6b7fff;
+            margin-bottom: 0.5rem;
+        }
+
+        .download-box-desc {
+            color: #a0a0a0;
+            margin-bottom: 1.5rem;
+        }
+
+        .download-box-hint {
+            color: #808080;
+            font-size: 0.85rem;
+            margin-top: 1rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -206,6 +234,54 @@ def render_navigation_buttons():
         )
 
 
+def render_windows_download():
+    """Render the Windows download section if the installer is available."""
+    zip_path = Path("TOPPView-Lite.zip")
+    if not zip_path.exists():
+        return False
+
+    st.markdown("---")
+
+    spacer1, center_col, spacer2 = st.columns([1, 3, 1])
+
+    with center_col:
+        st.markdown(
+            """
+            <div class="download-box">
+                <div class="download-box-title">📥 TOPPView-Lite for Windows</div>
+                <div class="download-box-desc">
+                    Download the offline version to use without an internet connection.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # Create columns for centered button
+        btn_spacer1, btn_col, btn_spacer2 = st.columns([1, 2, 1])
+        with btn_col:
+            with open(zip_path, "rb") as file:
+                st.download_button(
+                    label="Download for Windows",
+                    data=file,
+                    file_name="TOPPView-Lite.zip",
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+        st.markdown(
+            """
+            <div class="download-box-hint">
+                Extract the zip file and run the installer (.msi) to install.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    return True
+
+
 def render_features():
     """Render the features section."""
     st.markdown("---")
@@ -245,7 +321,7 @@ def render_quick_start():
             <h4>Getting Started</h4>
             <p>
                 1. <strong>Upload</strong> your mzML files on the Upload page<br>
-                2. Files are <strong>automatically preprocessed</strong> for fast visualization<br>
+                2. Preprocess files for fast visualization<br>
                 3. Go to the <strong>Viewer</strong> to explore your data interactively
             </p>
         </div>
@@ -277,6 +353,7 @@ def main():
     inject_custom_css()
     render_hero_section()
     render_navigation_buttons()
+    render_windows_download()
     render_features()
     render_quick_start()
 
