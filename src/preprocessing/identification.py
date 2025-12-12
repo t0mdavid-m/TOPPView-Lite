@@ -968,33 +968,53 @@ def precompute_spectrum_annotations(
     output_path: Path,
     status_callback: Optional[Callable[[str], None]] = None
 ) -> bool:
-    """Precompute fragment ion annotations for all identifications.
+    """Precompute unified spectrum plot with annotation columns.
 
-    Creates an annotated spectrum plot parquet file that includes annotation
-    columns for each (id_idx, peak_id) combination. This allows filtering
-    by both scan_id AND id_idx to show the correct annotations.
+    Creates a spectrum plot parquet file that includes annotation columns
+    (highlight, annotation) and an id_idx column for filtering:
+    - id_idx = -1: Base/unannotated peaks (for all spectra)
+    - id_idx = N: Annotated peaks for identification N
+
+    This allows a single LinePlot to show either unannotated or annotated
+    spectra based on the identification filter value.
 
     Args:
         peaks_df: DataFrame with all peaks (must have peak_id, scan_id, mass, intensity)
         id_paths: Dict with paths to identification data files
-        output_path: Path to write the annotated spectrum plot parquet
+        output_path: Path to write the unified spectrum plot parquet
         status_callback: Optional callback for progress messages
 
     Returns:
-        True if annotations were computed, False if no identifications found
+        True if file was created successfully
     """
+    # Load base spectrum plot data
+    spectrum_plot_cols = ["peak_id", "scan_id", "mass", "intensity"]
+    base_df = peaks_df.select(spectrum_plot_cols).filter(pl.col("intensity") > 0)
+
+    # Define consistent column order for output
+    output_columns = ["peak_id", "scan_id", "mass", "intensity", "id_idx", "highlight", "annotation"]
+
+    # Create base rows for ALL spectra with id_idx = -1 (unannotated)
+    base_with_empty_annotations = base_df.with_columns([
+        pl.lit(-1).cast(pl.Int32).alias("id_idx"),
+        pl.lit(False).alias("highlight"),
+        pl.lit("").alias("annotation"),
+    ]).select(output_columns)
+
     # Check if identification data exists
     if not id_paths.get("identifications") or not Path(id_paths["identifications"]).exists():
         if status_callback:
-            status_callback("No identification data found, skipping annotation precompute")
-        return False
+            status_callback("No identification data found, creating base spectrum plot only")
+        base_with_empty_annotations.write_parquet(output_path)
+        return True
 
     # Load identification data
     id_df = pl.read_parquet(id_paths["identifications"])
     if id_df.height == 0:
         if status_callback:
-            status_callback("No identifications found, skipping annotation precompute")
-        return False
+            status_callback("No identifications found, creating base spectrum plot only")
+        base_with_empty_annotations.write_parquet(output_path)
+        return True
 
     # Load fragment masses
     fragment_masses_path = id_paths.get("fragment_masses")
@@ -1102,23 +1122,31 @@ def precompute_spectrum_annotations(
             pl.lit(id_idx).alias("id_idx"),
             pl.col("highlight").fill_null(False),
             pl.col("annotation").fill_null(""),
-        ])
+        ]).select(output_columns)
 
         annotated_dfs.append(annotated)
 
-    if not annotated_dfs:
-        if status_callback:
-            status_callback("No annotated spectra created")
-        return False
+    # base_with_empty_annotations was already created at the start of the function
 
-    # Concatenate all annotated data
-    result_df = pl.concat(annotated_dfs)
+    # Combine base rows with annotated rows
+    if annotated_dfs:
+        # Concatenate annotated data
+        annotated_df = pl.concat(annotated_dfs)
+        # Combine base (id_idx=-1) with annotated (id_idx=N)
+        result_df = pl.concat([base_with_empty_annotations, annotated_df])
+        if status_callback:
+            status_callback(
+                f"Created unified spectrum plot: {base_with_empty_annotations.height} base + "
+                f"{annotated_df.height} annotated = {result_df.height} total rows"
+            )
+    else:
+        # No identifications matched - just use base data
+        result_df = base_with_empty_annotations
+        if status_callback:
+            status_callback(f"Created unified spectrum plot with {result_df.height} base rows (no annotations)")
 
     # Write to parquet
     result_df.write_parquet(output_path)
-
-    if status_callback:
-        status_callback(f"Created annotated spectrum plot with {result_df.height} rows, {len(all_annotations)} annotations")
 
     return True
 
