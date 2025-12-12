@@ -89,6 +89,15 @@ if file_cache_key not in st.session_state:
     state_manager = StateManager(session_key="viewer_state")
     state_manager.clear()
 
+    # Clear all render caches so new file data is sent to Vue
+    from streamlit_vue_components.rendering.bridge import _cached_prepare_vue_data, _VUE_ECHOED_HASH_KEY
+    from streamlit_vue_components.preprocessing.filtering import _cached_filter_and_collect
+    _cached_prepare_vue_data.clear()
+    _cached_filter_and_collect.clear()
+    # Also clear the Vue hash tracking so Vue receives fresh data
+    if _VUE_ECHOED_HASH_KEY in st.session_state:
+        st.session_state[_VUE_ECHOED_HASH_KEY].clear()
+
     # Load components for selected file
     paths = get_cache_paths(st.session_state.workspace, selected_file)
     im_info = load_im_info(paths)
@@ -280,21 +289,24 @@ with st.sidebar:
 # Create shared state manager
 state_manager = StateManager(session_key="viewer_state")
 
+# Use file-specific keys to force component refresh on file change
+file_key = selected_file.stem
+
 # Ion Mobility table (if present)
 if im_table is not None:
-    im_table(key="im_table", state_manager=state_manager, height=400)
+    im_table(key=f"{file_key}_im_table", state_manager=state_manager, height=400)
 
 # Heatmap (full width)
-heatmap(key="heatmap", state_manager=state_manager, height=400)
+heatmap(key=f"{file_key}_heatmap", state_manager=state_manager, height=400)
 
 # Tables side by side: Spectra | Peaks
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    spectra_table(key="spectra_table", state_manager=state_manager, height=400)
+    spectra_table(key=f"{file_key}_spectra_table", state_manager=state_manager, height=400)
 
 with col2:
-    peaks_table(key="peaks_table", state_manager=state_manager, height=400)
+    peaks_table(key=f"{file_key}_peaks_table", state_manager=state_manager, height=400)
 
 # =============================================================================
 # Spectrum Plot
@@ -303,11 +315,11 @@ with col2:
 # Render spectrum plot - filtering handles annotations automatically
 # When identification is selected: filters by scan_id AND id_idx (shows annotated peaks)
 # When no identification selected: filter_defaults maps identification to -1 (shows base peaks)
-spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
+spectrum_plot(key=f"{file_key}_spectrum_plot", state_manager=state_manager, height=400)
 
 # Identification table (below spectrum plot, only shown when IDs present)
 if has_ids:
-    id_table(key="id_table", state_manager=state_manager, height=300)
+    id_table(key=f"{file_key}_id_table", state_manager=state_manager, height=300)
 
 # =============================================================================
 # SequenceView (if identification selected)
