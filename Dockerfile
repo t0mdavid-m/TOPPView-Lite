@@ -1,9 +1,9 @@
 # This Dockerfile creates a container with pyOpenMS
 # It also adds a basic streamlit server that serves a pyOpenMS-based app.
 # hints:
-# build image with: docker build -f Dockerfile_simple --no-cache -t streamlitapp:latest --build-arg GITHUB_TOKEN=<your-github-token> . 2>&1 | tee build.log
+# build image with: docker build --no-cache -t toppview-lite:latest --build-arg GITHUB_TOKEN=<your-github-token> . 2>&1 | tee build.log
 # check if image was build: docker image ls
-# run container: docker run -p 8501:8501 streamlitapp:latest
+# run container: docker run -p 8501:8501 toppview-lite:latest
 # debug container after build (comment out ENTRYPOINT) and run container with interactive /bin/bash shell
 # prune unused images/etc. to free disc space (e.g. might be needed on gitpod). Use with care.: docker system prune --all --force
 
@@ -15,7 +15,7 @@ ENV GH_TOKEN=${GITHUB_TOKEN}
 # Streamlit app Gihub user name (to download artifact from).
 ARG GITHUB_USER=OpenMS
 # Streamlit app Gihub repository name (to download artifact from).
-ARG GITHUB_REPO=streamlit-template
+ARG GITHUB_REPO=TOPPView-Lite
 
 
 # Step 1: set up a sane build system
@@ -98,7 +98,7 @@ RUN jq '.online_deployment = true' settings.json > tmp.json && mv tmp.json setti
 # Download latest OpenMS App executable as a ZIP file
 RUN if [ -n "$GH_TOKEN" ]; then \
         echo "GH_TOKEN is set, proceeding to download the release asset..."; \
-        gh release download -R ${GITHUB_USER}/${GITHUB_REPO} -p "OpenMS-App.zip" -D /app; \
+        gh release download -R ${GITHUB_USER}/${GITHUB_REPO} -p "TOPPView-Lite.zip" -D /app; \
     else \
         echo "GH_TOKEN is not set, skipping the release asset download."; \
     fi
