@@ -354,14 +354,21 @@ if has_ids and id_df is not None and id_row is not None and sequence_data is not
     st.markdown("---")
     st.subheader(f"Peptide: {id_row['sequence_display']}")
 
-    # Get observed masses for SequenceView
+    # Get observed masses and peak_ids for SequenceView
     peaks_df = pl.read_parquet(paths["peaks"])
     scan_id = id_row.get("scan_id", -1)
     if scan_id > 0:
         spectrum_peaks = peaks_df.filter(pl.col("scan_id") == scan_id)
-        observed_masses = spectrum_peaks["mass"].to_list() if spectrum_peaks.height > 0 else []
+        if spectrum_peaks.height > 0:
+            observed_masses = spectrum_peaks["mass"].to_list()
+            # Get peak_ids for interactivity linking (same order as observed_masses)
+            peak_ids = spectrum_peaks["peak_id"].to_list()
+        else:
+            observed_masses = []
+            peak_ids = []
     else:
         observed_masses = []
+        peak_ids = []
 
     precursor_mass = id_row.get("precursor_mz", 0.0)
 
@@ -372,10 +379,12 @@ if has_ids and id_df is not None and id_row is not None and sequence_data is not
         cache_id=f"{selected_file.stem}_sequence_view",  # Single cache for all IDs
         sequence=id_row["sequence"],
         observed_masses=observed_masses,
+        peak_ids=peak_ids,  # Pass peak_ids for interactivity linking
         precursor_mass=precursor_mass,
         cache_path=str(paths["component_cache"]),
         deconvolved=False,  # m/z data, not deconvolved neutral masses
         precursor_charge=id_row.get("charge", 2),  # Use precursor charge for max fragment charge
+        interactivity={"peak": "peak_id"},  # Enable cross-component selection
         # Pass pre-computed sequence data to skip redundant calculation
         _precomputed_sequence_data=sequence_data,
     )
