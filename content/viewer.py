@@ -18,7 +18,7 @@ from pathlib import Path
 import streamlit as st
 import polars as pl
 import pyarrow.parquet as pq
-from streamlit_vue_components import StateManager, Table, SequenceView
+from streamlit_vue_components import StateManager, Table, SequenceView, LinePlot
 
 from src.common.common import page_setup
 from src.preprocessing import (
@@ -34,6 +34,7 @@ from src.preprocessing.identification import (
     get_sequence_data_for_identification,
     load_search_params,
     compute_peak_annotations_for_spectrum,
+    precompute_spectrum_annotations,
 )
 from src.components import create_components
 
@@ -111,6 +112,7 @@ if file_cache_key not in st.session_state:
     search_params = None
     id_paths = None
     has_ids = False
+    annotated_spectrum_plot = None
 
     if idxml_path:
         id_paths = get_id_cache_paths(st.session_state.workspace, idxml_path)
@@ -193,11 +195,42 @@ if file_cache_key not in st.session_state:
                     title="Identifications",
                 )
 
+                # Precompute spectrum annotations (once, cached to parquet)
+                annotated_path = paths["annotated_spectrum_plot"]
+                if not annotated_path.exists():
+                    peaks_df = pl.read_parquet(paths["peaks"])
+                    precompute_spectrum_annotations(
+                        peaks_df,
+                        id_paths,
+                        annotated_path,
+                        status_callback=lambda msg: st.toast(msg)
+                    )
+
+                # Create annotated spectrum plot component that filters by both scan_id and id_idx
+                if annotated_path.exists():
+                    annotated_spectrum_plot = LinePlot(
+                        cache_id=f"{selected_file.stem}_annotated_spectrum_plot",
+                        data=pl.scan_parquet(annotated_path),
+                        cache_path=str(paths["component_cache"]),
+                        filters={"identification": "id_idx"},
+                        interactivity={"peak": "peak_id"},
+                        x_column="mass",
+                        y_column="intensity",
+                        highlight_column="highlight",
+                        annotation_column="annotation",
+                        title="Mass Spectrum (with annotations)",
+                        xlabel="m/z",
+                        ylabel="Intensity",
+                    )
+                else:
+                    annotated_spectrum_plot = None
+
     st.session_state[file_cache_key] = {
         "im_table": im_table,
         "spectra_table": spectra_table,
         "peaks_table": peaks_table,
         "spectrum_plot": spectrum_plot,
+        "annotated_spectrum_plot": annotated_spectrum_plot,
         "heatmap": heatmap,
         "im_info": im_info,
         "num_spectra": num_spectra,
@@ -217,6 +250,7 @@ im_table = cached["im_table"]
 spectra_table = cached["spectra_table"]
 peaks_table = cached["peaks_table"]
 spectrum_plot = cached["spectrum_plot"]
+annotated_spectrum_plot = cached["annotated_spectrum_plot"]
 heatmap = cached["heatmap"]
 im_info = cached["im_info"]
 num_spectra = cached["num_spectra"]
@@ -281,62 +315,31 @@ with col2:
 # Spectrum Plot with Annotations
 # =============================================================================
 
-# Get current selection state to check if we need annotated plot
+# Get current selection state to check if we should use annotated plot
 current_state = state_manager.get_state_for_vue()
 selected_id_idx = current_state.get("identification")
-selected_scan_id = current_state.get("spectrum")
 
-print(f"[ANNOTATION DEBUG] has_ids={has_ids}, selected_id_idx={selected_id_idx}, selected_scan_id={selected_scan_id}")
-
-# Check if we should show annotated spectrum
+# Get identification row if selected (for SequenceView)
 id_row = None
 sequence_data = None
 
 if has_ids and id_df is not None and selected_id_idx is not None:
-    # Find the selected identification
     selected_rows = id_df.filter(pl.col("id_idx") == selected_id_idx)
     if selected_rows.height > 0:
         id_row = selected_rows.row(0, named=True)
-        id_scan_id = id_row.get("scan_id", -1)
+        # Get sequence data for SequenceView
+        peaks_df = pl.read_parquet(paths["peaks"])
+        sequence_data, _, _ = get_sequence_data_for_identification(
+            id_row, peaks_df, fragment_masses_df, peak_annotations_df, search_params
+        )
 
-        # Only annotate if the spectrum matches the identification's linked spectrum
-        if id_scan_id > 0 and (selected_scan_id is None or selected_scan_id == id_scan_id):
-            # Load peaks and compute annotations
-            peaks_df = pl.read_parquet(paths["peaks"])
-
-            # Get sequence data with fragment masses
-            sequence_data, observed_masses, precursor_mass = get_sequence_data_for_identification(
-                id_row, peaks_df, fragment_masses_df, peak_annotations_df, search_params
-            )
-
-            # Get tolerance from search params
-            tolerance = search_params.get("fragment_mass_tolerance", 20.0) if search_params else 20.0
-            tolerance_ppm = search_params.get("fragment_mass_tolerance_ppm", True) if search_params else True
-
-            # Compute annotations as dict {mz: {highlight, annotation}}
-            annotations_dict = compute_peak_annotations_for_spectrum(
-                peaks_df,
-                id_scan_id,
-                sequence_data,
-                precursor_charge=id_row.get("charge", 2),
-                tolerance=tolerance,
-                tolerance_ppm=tolerance_ppm,
-            )
-
-            # Set dynamic annotations on the existing spectrum_plot
-            spectrum_plot.set_dynamic_annotations(
-                annotations=annotations_dict,
-                title=f"Mass Spectrum - {id_row['sequence_display']}"
-            )
-        else:
-            # Clear annotations if spectrum changed
-            spectrum_plot.clear_dynamic_annotations()
+# Use annotated_spectrum_plot when an identification is selected, otherwise use regular spectrum_plot
+if selected_id_idx is not None and annotated_spectrum_plot is not None:
+    # Render annotated spectrum plot (filters by id_idx, shows highlight/annotation columns)
+    annotated_spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
 else:
-    # Clear annotations when no ID selected
-    spectrum_plot.clear_dynamic_annotations()
-
-# Always render the same spectrum_plot (now with or without dynamic annotations)
-spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
+    # Render regular spectrum plot (filters by scan_id only)
+    spectrum_plot(key="spectrum_plot", state_manager=state_manager, height=400)
 
 # Identification table (below spectrum plot, only shown when IDs present)
 if has_ids:

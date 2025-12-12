@@ -43,6 +43,7 @@ def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
         "spectra_table": components_dir / "spectra_table.parquet",
         "peaks_table": components_dir / "peaks_table.parquet",
         "spectrum_plot": components_dir / "spectrum_plot.parquet",
+        "annotated_spectrum_plot": components_dir / "annotated_spectrum_plot.parquet",
         "heatmap_input": components_dir / "heatmap_input.parquet",
         "im_table": components_dir / "im_table.parquet",
         # Component cache directory (for Heatmap compression levels, etc.)

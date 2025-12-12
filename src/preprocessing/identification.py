@@ -872,7 +872,7 @@ def compute_peak_annotations_for_spectrum(
     tolerance: float = 20.0,
     tolerance_ppm: bool = True,
     ion_types: Optional[List[str]] = None,
-) -> Dict[float, Dict[str, Any]]:
+) -> Dict[int, Dict[str, Any]]:
     """Compute fragment ion annotations for peaks in a spectrum.
 
     Matches observed peaks against theoretical fragment masses considering
@@ -888,8 +888,8 @@ def compute_peak_annotations_for_spectrum(
         ion_types: List of ion types to consider (default: ['b', 'y'])
 
     Returns:
-        Dict mapping m/z values to annotation data:
-        {mz_value: {'highlight': True, 'annotation': 'b3¹⁺'}, ...}
+        Dict mapping peak index to annotation data:
+        {index: {'highlight': True, 'annotation': 'b3¹⁺'}, ...}
         Can be passed directly to LinePlot.set_dynamic_annotations()
     """
     if ion_types is None:
@@ -900,8 +900,9 @@ def compute_peak_annotations_for_spectrum(
     if spectrum_peaks.height == 0:
         return {}
 
-    # Get observed m/z values
+    # Get observed m/z values and peak_ids as numpy arrays
     observed_mz = spectrum_peaks["mass"].to_numpy()
+    peak_ids = spectrum_peaks["peak_id"].to_numpy()
 
     # Superscript digits for charge display
     superscript = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
@@ -910,8 +911,8 @@ def compute_peak_annotations_for_spectrum(
     def to_superscript(n: int) -> str:
         return ''.join(superscript.get(d, d) for d in str(n))
 
-    # Initialize result dict: mz -> {highlight, annotation}
-    annotations_dict: Dict[float, Dict[str, Any]] = {}
+    # Initialize result dict: index -> {highlight, annotation}
+    annotations_dict: Dict[int, Dict[str, Any]] = {}
 
     # Build list of theoretical fragments with their labels
     # Each entry: (theoretical_mz, label, ion_type, ion_number)
@@ -945,20 +946,181 @@ def compute_peak_annotations_for_spectrum(
         else:
             tol_da = tolerance
 
-        for obs_mz in observed_mz:
+        for idx, obs_mz in enumerate(observed_mz):
             mass_diff = abs(obs_mz - frag_mz)
             if mass_diff <= tol_da:
-                # Use float as key
-                mz_key = float(obs_mz)
-                if mz_key not in annotations_dict:
-                    annotations_dict[mz_key] = {'highlight': True, 'annotation': label}
+                # Use peak_id as key (stable identifier, independent of row order)
+                peak_id = int(peak_ids[idx])
+                if peak_id not in annotations_dict:
+                    annotations_dict[peak_id] = {'highlight': True, 'annotation': label}
                 else:
                     # Peak already matched - append this annotation if different
-                    existing = annotations_dict[mz_key]['annotation']
+                    existing = annotations_dict[peak_id]['annotation']
                     if label not in existing:
-                        annotations_dict[mz_key]['annotation'] = f"{existing}/{label}"
+                        annotations_dict[peak_id]['annotation'] = f"{existing}/{label}"
 
     return annotations_dict
+
+
+def precompute_spectrum_annotations(
+    peaks_df: pl.DataFrame,
+    id_paths: dict,
+    output_path: Path,
+    status_callback: Optional[Callable[[str], None]] = None
+) -> bool:
+    """Precompute fragment ion annotations for all identifications.
+
+    Creates an annotated spectrum plot parquet file that includes annotation
+    columns for each (id_idx, peak_id) combination. This allows filtering
+    by both scan_id AND id_idx to show the correct annotations.
+
+    Args:
+        peaks_df: DataFrame with all peaks (must have peak_id, scan_id, mass, intensity)
+        id_paths: Dict with paths to identification data files
+        output_path: Path to write the annotated spectrum plot parquet
+        status_callback: Optional callback for progress messages
+
+    Returns:
+        True if annotations were computed, False if no identifications found
+    """
+    # Check if identification data exists
+    if not id_paths.get("identifications") or not Path(id_paths["identifications"]).exists():
+        if status_callback:
+            status_callback("No identification data found, skipping annotation precompute")
+        return False
+
+    # Load identification data
+    id_df = pl.read_parquet(id_paths["identifications"])
+    if id_df.height == 0:
+        if status_callback:
+            status_callback("No identifications found, skipping annotation precompute")
+        return False
+
+    # Load fragment masses
+    fragment_masses_path = id_paths.get("fragment_masses")
+    if not fragment_masses_path or not Path(fragment_masses_path).exists():
+        if status_callback:
+            status_callback("No fragment masses found, skipping annotation precompute")
+        return False
+
+    fragment_masses_df = pl.read_parquet(fragment_masses_path)
+
+    # Load search params for tolerance
+    search_params = {}
+    search_params_path = id_paths.get("search_params")
+    if search_params_path and Path(search_params_path).exists():
+        with open(search_params_path) as f:
+            search_params = json.load(f)
+
+    tolerance = search_params.get("fragment_mass_tolerance", 20.0)
+    tolerance_ppm = search_params.get("fragment_mass_tolerance_ppm", True)
+
+    if status_callback:
+        status_callback(f"Computing annotations for {id_df.height} identifications...")
+
+    # Collect all annotations
+    all_annotations = []
+
+    for row in id_df.iter_rows(named=True):
+        id_idx = row["id_idx"]
+        scan_id = row.get("scan_id", -1)
+        sequence = row.get("sequence", "")
+
+        if scan_id < 0 or not sequence:
+            continue
+
+        # Get fragment masses for this sequence (fragment_masses keyed by sequence, not id_idx)
+        frag_row = fragment_masses_df.filter(pl.col("sequence") == sequence)
+        if frag_row.height == 0:
+            continue
+
+        frag_data = frag_row.row(0, named=True)
+
+        # Build sequence_data dict for compute_peak_annotations_for_spectrum
+        sequence_data = {
+            "fragment_masses_b": json.loads(frag_data.get("fragment_masses_b", "[]")),
+            "fragment_masses_y": json.loads(frag_data.get("fragment_masses_y", "[]")),
+        }
+
+        # Compute annotations for this identification
+        precursor_charge = row.get("charge", 2)
+        annotations = compute_peak_annotations_for_spectrum(
+            peaks_df,
+            scan_id,
+            sequence_data,
+            precursor_charge=precursor_charge,
+            tolerance=tolerance,
+            tolerance_ppm=tolerance_ppm,
+        )
+
+        # Add to collection with id_idx
+        for peak_id, ann_data in annotations.items():
+            all_annotations.append({
+                "id_idx": id_idx,
+                "peak_id": peak_id,
+                "highlight": ann_data.get("highlight", False),
+                "annotation": ann_data.get("annotation", ""),
+            })
+
+    if not all_annotations:
+        if status_callback:
+            status_callback("No peak annotations computed")
+        return False
+
+    # Create annotations DataFrame
+    ann_df = pl.DataFrame(all_annotations)
+
+    # Load base spectrum plot data
+    spectrum_plot_cols = ["peak_id", "scan_id", "mass", "intensity"]
+    base_df = peaks_df.select(spectrum_plot_cols).filter(pl.col("intensity") > 0)
+
+    # Get unique scan_ids that have identifications
+    id_scan_ids = id_df.filter(pl.col("scan_id") > 0).select("id_idx", "scan_id").unique()
+
+    # Create annotated data by joining peaks with annotations per identification
+    # For each (id_idx, scan_id) pair, join the peaks with their annotations
+    annotated_dfs = []
+
+    for row in id_scan_ids.iter_rows(named=True):
+        id_idx = row["id_idx"]
+        scan_id = row["scan_id"]
+
+        # Get peaks for this scan
+        scan_peaks = base_df.filter(pl.col("scan_id") == scan_id)
+        if scan_peaks.height == 0:
+            continue
+
+        # Get annotations for this identification
+        id_annotations = ann_df.filter(pl.col("id_idx") == id_idx)
+
+        # Left join to keep all peaks, adding annotation columns
+        annotated = scan_peaks.join(
+            id_annotations.select(["peak_id", "highlight", "annotation"]),
+            on="peak_id",
+            how="left"
+        ).with_columns([
+            pl.lit(id_idx).alias("id_idx"),
+            pl.col("highlight").fill_null(False),
+            pl.col("annotation").fill_null(""),
+        ])
+
+        annotated_dfs.append(annotated)
+
+    if not annotated_dfs:
+        if status_callback:
+            status_callback("No annotated spectra created")
+        return False
+
+    # Concatenate all annotated data
+    result_df = pl.concat(annotated_dfs)
+
+    # Write to parquet
+    result_df.write_parquet(output_path)
+
+    if status_callback:
+        status_callback(f"Created annotated spectrum plot with {result_df.height} rows, {len(all_annotations)} annotations")
+
+    return True
 
 
 def find_matching_idxml(mzml_path: Path, workspace: Path) -> Optional[Path]:
