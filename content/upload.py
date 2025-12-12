@@ -133,7 +133,8 @@ def preprocess_file(mzml_path: Path) -> bool:
 
             st.write("Pre-computing visualization caches...")
             im_info = load_im_info(paths)
-            create_components(paths, im_info)
+            # Use file_id to match cache_ids expected by viewer.py
+            create_components(paths, im_info, file_id=mzml_path.stem)
             status.update(label=f"Processed {mzml_path.name}", state="complete")
         return True
     except Exception as e:
