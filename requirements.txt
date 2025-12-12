@@ -89,7 +89,7 @@ pyopenms==3.3.0
     # via src (pyproject.toml)
 pyopenms-viz==1.0.0
     # via src (pyproject.toml)
-pyparsing==3.2.3
+pyparsing==3.2.5
     # via matplotlib
 python-dateutil==2.9.0.post0
     # via
