@@ -33,19 +33,19 @@ def inject_custom_css():
 
         .hero-subtitle {
             font-size: 1.25rem;
-            color: #6c757d;
+            color: #a0a0a0;
             margin-bottom: 2rem;
         }
 
         /* Feature card styling */
         .feature-card {
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            border: 2px solid #dee2e6;
+            background: linear-gradient(135deg, #262730 0%, #1e1e2e 100%);
+            border: 2px solid #444;
             border-radius: 12px;
             padding: 1.5rem;
             text-align: center;
             height: 100%;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
 
         .feature-icon {
@@ -56,13 +56,13 @@ def inject_custom_css():
         .feature-title {
             font-size: 1.1rem;
             font-weight: 600;
-            color: #29379b;
+            color: #6b7fff;
             margin-bottom: 0.5rem;
         }
 
         .feature-desc {
             font-size: 0.9rem;
-            color: #6c757d;
+            color: #a0a0a0;
         }
 
         /* Navigation button styling */
@@ -75,21 +75,32 @@ def inject_custom_css():
 
         /* Info box styling */
         .info-box {
-            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-            border: 1px solid #90caf9;
+            background: linear-gradient(135deg, #1e2a3a 0%, #1a2530 100%);
+            border: 1px solid #2a4a6a;
             border-radius: 8px;
             padding: 1rem 1.5rem;
             margin: 1.5rem 0;
         }
 
         .info-box h4 {
-            color: #1565c0;
+            color: #64b5f6;
             margin-bottom: 0.5rem;
         }
 
         .info-box p {
-            color: #1976d2;
+            color: #90caf9;
             margin: 0;
+        }
+
+        /* Footer styling */
+        .footer-text {
+            text-align: center;
+            color: #a0a0a0;
+            font-size: 0.9rem;
+        }
+
+        .footer-text a {
+            color: #6b7fff;
         }
         </style>
         """,
@@ -115,30 +126,30 @@ def create_navigation_button(emoji, title, subtitle, page_path):
         f"""
         <style>
         .st-key-{button_key} button {{
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%) !important;
-            border: 2px solid #dee2e6 !important;
+            background: linear-gradient(135deg, #262730 0%, #1e1e2e 100%) !important;
+            border: 2px solid #444 !important;
             border-radius: 12px !important;
             padding: 2rem 1.5rem !important;
             height: 200px !important;
             min-height: 200px !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important;
             transition: all 0.3s ease !important;
-            color: #29379b !important;
+            color: #6b7fff !important;
             font-size: 1.25rem !important;
             font-weight: 700 !important;
         }}
 
         .st-key-{button_key} button p {{
-            color: #29379b !important;
+            color: #6b7fff !important;
             font-size: 1.25rem !important;
             font-weight: 700 !important;
         }}
 
         .st-key-{button_key} button:hover {{
-            background: linear-gradient(135deg, #29379b 0%, #1e2a7a 100%) !important;
-            border-color: #29379b !important;
+            background: linear-gradient(135deg, #3a4abf 0%, #29379b 100%) !important;
+            border-color: #4a5acf !important;
             transform: translateY(-4px) !important;
-            box-shadow: 0 8px 24px rgba(41, 55, 155, 0.3) !important;
+            box-shadow: 0 8px 24px rgba(41, 55, 155, 0.4) !important;
         }}
 
         .st-key-{button_key} button:hover p {{
@@ -150,12 +161,12 @@ def create_navigation_button(emoji, title, subtitle, page_path):
             display: block;
             font-size: 0.9rem !important;
             font-weight: 500 !important;
-            color: #6c757d !important;
+            color: #a0a0a0 !important;
             margin-top: 0.5rem !important;
         }}
 
         .st-key-{button_key} button:hover::after {{
-            color: #e9ecef !important;
+            color: #e0e0e0 !important;
         }}
         </style>
         """,
@@ -283,7 +294,7 @@ def render_footer():
     with col2:
         st.markdown(
             """
-            <div style="text-align: center; color: #6c757d; font-size: 0.9rem;">
+            <div class="footer-text">
                 <p>
                     TOPPView-Lite is part of the <a href="https://openms.de" target="_blank">OpenMS</a> ecosystem<br>
                     Built with <a href="https://streamlit.io" target="_blank">Streamlit</a> and Vue.js
