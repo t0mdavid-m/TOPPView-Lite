@@ -140,6 +140,4 @@ xlsxwriter
 
 # Additional dependencies for TOPPView-Lite viewer
 polars>=0.19.0
-    # via toppview-lite (for data processing)
-# openms-insight should be installed from the local package:
-# pip install -e ../openms-insight
+openms-insight
