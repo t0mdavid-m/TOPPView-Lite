@@ -1,6 +1,6 @@
 """Welcome page for TOPPView-Lite.
 
-A lightweight mzML viewer for mass spectrometry data visualization.
+A viewer for mass spectrometry data visualization.
 """
 
 import streamlit as st
@@ -172,7 +172,7 @@ def render_hero_section():
         st.markdown(
             """
             <h1 class="hero-title">TOPPView-Lite</h1>
-            <p class="hero-subtitle">A lightweight mzML viewer for mass spectrometry data</p>
+            <p class="hero-subtitle">A viewer for mass spectrometry data</p>
             """,
             unsafe_allow_html=True,
         )
