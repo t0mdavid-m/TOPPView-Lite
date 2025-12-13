@@ -90,10 +90,8 @@ if file_cache_key not in st.session_state:
     state_manager.clear()
 
     # Clear all render caches so new file data is sent to Vue
-    from openms_insight.rendering.bridge import _cached_prepare_vue_data, _VUE_ECHOED_HASH_KEY
-    from openms_insight.preprocessing.filtering import _cached_filter_and_collect
-    _cached_prepare_vue_data.clear()
-    _cached_filter_and_collect.clear()
+    from openms_insight.rendering.bridge import clear_component_cache, _VUE_ECHOED_HASH_KEY
+    clear_component_cache()
     # Also clear the Vue hash tracking so Vue receives fresh data
     if _VUE_ECHOED_HASH_KEY in st.session_state:
         st.session_state[_VUE_ECHOED_HASH_KEY].clear()
