@@ -7,8 +7,7 @@ preprocessed parquet files.
 from pathlib import Path
 from typing import Optional, Tuple
 
-import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, preprocess_component
+from openms_insight import Table, LinePlot, Heatmap
 
 
 def create_components(
@@ -43,7 +42,7 @@ def create_components(
     if has_im and paths["im_table"].exists():
         im_table = Table(
             cache_id=f"{prefix}im_table",
-            data=pl.scan_parquet(paths["im_table"]),
+            data_path=str(paths["im_table"]),
             cache_path=cache_path,
             interactivity={"im_dimension": "im_id"},
             column_definitions=[
@@ -68,7 +67,7 @@ def create_components(
     spectra_filters = {"im_dimension": "im_id"} if has_im else None
     spectra_table = Table(
         cache_id=f"{prefix}spectra_table",
-        data=pl.scan_parquet(paths["spectra_table"]),
+        data_path=str(paths["spectra_table"]),
         cache_path=cache_path,
         filters=spectra_filters,
         interactivity={"spectrum": "scan_id"},
@@ -124,7 +123,7 @@ def create_components(
         # Use unified annotated data with identification filter
         # Note: im_dimension filtering happens via spectra_table → spectrum selection
         # The annotated data doesn't have im_id column, so we only filter by spectrum and identification
-        plot_kwargs["data"] = pl.scan_parquet(annotated_path)
+        plot_kwargs["data_path"] = str(annotated_path)
         plot_kwargs["filters"] = {"spectrum": "scan_id", "identification": "id_idx"}
         plot_kwargs["filter_defaults"] = {"identification": -1}
         plot_kwargs["highlight_column"] = "highlight"
@@ -134,7 +133,7 @@ def create_components(
         plot_filters = {"spectrum": "scan_id"}
         if has_im:
             plot_filters["im_dimension"] = "im_id"
-        plot_kwargs["data"] = pl.scan_parquet(paths["spectrum_plot"])
+        plot_kwargs["data_path"] = str(paths["spectrum_plot"])
         plot_kwargs["filters"] = plot_filters
 
     spectrum_plot = LinePlot(**plot_kwargs)
@@ -146,7 +145,7 @@ def create_components(
 
     peaks_table = Table(
         cache_id=f"{prefix}peaks_table",
-        data=pl.scan_parquet(paths["peaks_table"]),
+        data_path=str(paths["peaks_table"]),
         cache_path=cache_path,
         filters=peaks_filters,
         interactivity={"peak": "peak_id"},
@@ -172,38 +171,25 @@ def create_components(
         default_row=-1,
     )
 
-    # Heatmap - use subprocess preprocessing to release memory after cache creation
+    # Heatmap - data_path triggers subprocess preprocessing for memory efficiency
     heatmap_filters = {"im_dimension": "im_id"} if has_im else None
     categorical_filters = ["im_dimension"] if has_im else None
-    heatmap_cache_id = f"{prefix}peaks_heatmap"
 
-    heatmap_kwargs = {
-        "cache_id": heatmap_cache_id,
-        "cache_path": cache_path,
-        "filters": heatmap_filters,
-        "categorical_filters": categorical_filters,
-        "x_column": "retention_time",
-        "y_column": "mass",
-        "intensity_column": "intensity",
-        "interactivity": {"spectrum": "scan_id", "peak": "peak_id"},
-        "title": "Peak Map",
-        "x_label": "Retention Time (min)",
-        "y_label": "m/z",
-        "min_points": 20000,
-        "colorscale": "Portland",
-    }
-
-    # Try to load from cache first, otherwise preprocess in subprocess
-    try:
-        heatmap = Heatmap(**heatmap_kwargs)  # No data = load from cache
-    except Exception:
-        # Cache miss - preprocess in subprocess to release memory after
-        preprocess_component(
-            Heatmap,
-            data_path=str(paths["heatmap_input"]),
-            **heatmap_kwargs,
-        )
-        # Now load from cache
-        heatmap = Heatmap(**heatmap_kwargs)
+    heatmap = Heatmap(
+        cache_id=f"{prefix}peaks_heatmap",
+        data_path=str(paths["heatmap_input"]),
+        cache_path=cache_path,
+        filters=heatmap_filters,
+        categorical_filters=categorical_filters,
+        x_column="retention_time",
+        y_column="mass",
+        intensity_column="intensity",
+        interactivity={"spectrum": "scan_id", "peak": "peak_id"},
+        title="Peak Map",
+        x_label="Retention Time (min)",
+        y_label="m/z",
+        min_points=20000,
+        colorscale="Portland",
+    )
 
     return im_table, spectra_table, peaks_table, spectrum_plot, heatmap
