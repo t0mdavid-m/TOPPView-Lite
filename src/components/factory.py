@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap
+from openms_insight import Table, LinePlot, Heatmap, preprocess_component
 
 
 def create_components(
@@ -172,25 +172,38 @@ def create_components(
         default_row=-1,
     )
 
-    # Heatmap
+    # Heatmap - use subprocess preprocessing to release memory after cache creation
     heatmap_filters = {"im_dimension": "im_id"} if has_im else None
     categorical_filters = ["im_dimension"] if has_im else None
+    heatmap_cache_id = f"{prefix}peaks_heatmap"
 
-    heatmap = Heatmap(
-        cache_id=f"{prefix}peaks_heatmap",
-        data=pl.scan_parquet(paths["heatmap_input"]),
-        cache_path=cache_path,
-        filters=heatmap_filters,
-        categorical_filters=categorical_filters,
-        x_column="retention_time",
-        y_column="mass",
-        intensity_column="intensity",
-        interactivity={"spectrum": "scan_id", "peak": "peak_id"},
-        title="Peak Map",
-        x_label="Retention Time (min)",
-        y_label="m/z",
-        min_points=20000,
-        colorscale="Portland",
-    )
+    heatmap_kwargs = {
+        "cache_id": heatmap_cache_id,
+        "cache_path": cache_path,
+        "filters": heatmap_filters,
+        "categorical_filters": categorical_filters,
+        "x_column": "retention_time",
+        "y_column": "mass",
+        "intensity_column": "intensity",
+        "interactivity": {"spectrum": "scan_id", "peak": "peak_id"},
+        "title": "Peak Map",
+        "x_label": "Retention Time (min)",
+        "y_label": "m/z",
+        "min_points": 20000,
+        "colorscale": "Portland",
+    }
+
+    # Try to load from cache first, otherwise preprocess in subprocess
+    try:
+        heatmap = Heatmap(**heatmap_kwargs)  # No data = load from cache
+    except Exception:
+        # Cache miss - preprocess in subprocess to release memory after
+        preprocess_component(
+            Heatmap,
+            data_path=str(paths["heatmap_input"]),
+            **heatmap_kwargs,
+        )
+        # Now load from cache
+        heatmap = Heatmap(**heatmap_kwargs)
 
     return im_table, spectra_table, peaks_table, spectrum_plot, heatmap
