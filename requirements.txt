@@ -140,4 +140,4 @@ xlsxwriter
 
 # Additional dependencies for TOPPView-Lite viewer
 polars>=0.19.0
-openms-insight
+openms-insight>=0.1.2

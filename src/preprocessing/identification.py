@@ -3,23 +3,17 @@
 This module handles loading identification data (idXML files) and linking
 identifications to spectra based on retention time and precursor m/z matching.
 
-Uses pyOpenMS TheoreticalSpectrumGenerator for accurate fragment mass calculation
-and extracts external peak annotations when available from the idXML file.
+Fragment matching and annotation is now handled by openms_insight.SequenceView
+in the Vue frontend, so this module no longer precomputes fragment annotations.
 """
 
 from pathlib import Path
-from typing import Optional, Callable, Tuple, List, Dict, Any
+from typing import Optional, Callable, Dict, Any
 import json
 
 import numpy as np
 import polars as pl
-from pyopenms import (
-    IdXMLFile,
-    AASequence,
-    TheoreticalSpectrumGenerator,
-    MSSpectrum,
-    Param,
-)
+from pyopenms import IdXMLFile, AASequence
 
 
 # Default matching tolerances
@@ -34,9 +28,7 @@ def get_id_cache_paths(workspace: Path, idxml_path: Path) -> dict:
     {workspace}/.cache/{file_stem}/
     └── identifications/
         ├── identifications.parquet
-        ├── fragment_masses.parquet  (pre-computed for all sequences)
-        ├── peak_annotations.parquet (external annotations from idXML)
-        ├── search_params.json       (search engine parameters)
+        ├── search_params.json
         └── id_info.json
     """
     cache_dir = Path(workspace) / ".cache" / idxml_path.stem
@@ -44,8 +36,6 @@ def get_id_cache_paths(workspace: Path, idxml_path: Path) -> dict:
 
     return {
         "identifications": id_dir / "identifications.parquet",
-        "fragment_masses": id_dir / "fragment_masses.parquet",
-        "peak_annotations": id_dir / "peak_annotations.parquet",
         "search_params": id_dir / "search_params.json",
         "id_info": id_dir / "id_info.json",
     }
@@ -54,16 +44,14 @@ def get_id_cache_paths(workspace: Path, idxml_path: Path) -> dict:
 def id_cache_is_valid(idxml_path: Path, paths: dict) -> bool:
     """Check if identification cache files exist and are newer than the idXML file."""
     id_pq = paths["identifications"]
-    frag_pq = paths["fragment_masses"]
     id_info = paths["id_info"]
 
-    if not id_pq.exists() or not frag_pq.exists() or not id_info.exists():
+    if not id_pq.exists() or not id_info.exists():
         return False
 
     idxml_mtime = idxml_path.stat().st_mtime
     return (
         id_pq.stat().st_mtime > idxml_mtime
-        and frag_pq.stat().st_mtime > idxml_mtime
         and id_info.stat().st_mtime > idxml_mtime
     )
 
@@ -108,194 +96,6 @@ def calculate_peptide_mass(sequence_str: str) -> float:
         return aa_seq.getMonoWeight()
     except Exception:
         return 0.0
-
-
-def calculate_fragment_masses_tsg(
-    sequence_str: str,
-    max_charge: int = 1,
-    ion_types: Optional[List[str]] = None,
-) -> Dict[str, List[List[float]]]:
-    """Calculate theoretical fragment masses using TheoreticalSpectrumGenerator.
-
-    This uses pyOpenMS's TheoreticalSpectrumGenerator which properly handles:
-    - Modifications (including variable and fixed)
-    - Multiple charge states
-    - All ion types (a, b, c, x, y, z)
-
-    Args:
-        sequence_str: Peptide sequence string (can include modifications)
-        max_charge: Maximum charge state to consider (default 1 for neutral masses)
-        ion_types: List of ion types to generate. Default: ['a', 'b', 'c', 'x', 'y', 'z']
-
-    Returns:
-        Dict with fragment_masses_a, fragment_masses_b, etc.
-        Each is a list of lists (to support multiple charge states or ambiguous mods).
-    """
-    if ion_types is None:
-        ion_types = ['a', 'b', 'c', 'x', 'y', 'z']
-
-    try:
-        aa_seq = AASequence.fromString(sequence_str)
-        n = aa_seq.size()
-
-        # Configure TheoreticalSpectrumGenerator
-        tsg = TheoreticalSpectrumGenerator()
-        params = tsg.getParameters()
-
-        # Enable requested ion types
-        params.setValue("add_a_ions", "true" if 'a' in ion_types else "false")
-        params.setValue("add_b_ions", "true" if 'b' in ion_types else "false")
-        params.setValue("add_c_ions", "true" if 'c' in ion_types else "false")
-        params.setValue("add_x_ions", "true" if 'x' in ion_types else "false")
-        params.setValue("add_y_ions", "true" if 'y' in ion_types else "false")
-        params.setValue("add_z_ions", "true" if 'z' in ion_types else "false")
-        params.setValue("add_metainfo", "true")  # Needed for ion names
-
-        tsg.setParameters(params)
-
-        # Generate spectrum for charge 1 (neutral masses)
-        spec = MSSpectrum()
-        tsg.getSpectrum(spec, aa_seq, 1, max_charge)
-
-        # Initialize result dict
-        result = {f'fragment_masses_{ion}': [[] for _ in range(n)] for ion in ion_types}
-
-        # Get ion names from StringDataArrays
-        ion_names = []
-        sdas = spec.getStringDataArrays()
-        for sda in sdas:
-            if sda.getName() == "IonNames":
-                for i in range(sda.size()):
-                    # Values are bytes, decode to string
-                    name = sda[i]
-                    if isinstance(name, bytes):
-                        name = name.decode('utf-8')
-                    ion_names.append(name)
-                break
-
-        # Parse generated peaks and organize by ion type and position
-        for i in range(spec.size()):
-            peak = spec[i]
-            mz = peak.getMZ()
-
-            # Get ion annotation from StringDataArray
-            ion_name = ion_names[i] if i < len(ion_names) else ""
-
-            if not ion_name:
-                continue
-
-            # Parse ion name (e.g., "b3+", "y5++", "a2+")
-            # Format: {ion_type}{number}{charge_suffix}
-            ion_type = None
-            ion_number = None
-
-            for t in ion_types:
-                if ion_name.lower().startswith(t):
-                    ion_type = t
-                    # Extract number after ion type letter
-                    try:
-                        num_str = ""
-                        for c in ion_name[1:]:
-                            if c.isdigit():
-                                num_str += c
-                            else:
-                                break
-                        if num_str:
-                            ion_number = int(num_str)
-                    except (ValueError, IndexError):
-                        pass
-                    break
-
-            if ion_type and ion_number and 1 <= ion_number <= n:
-                # Store mass at the appropriate position
-                # For prefix ions (a, b, c): index = ion_number - 1
-                # For suffix ions (x, y, z): index = ion_number - 1
-                idx = ion_number - 1
-                key = f'fragment_masses_{ion_type}'
-                if idx < len(result[key]):
-                    result[key][idx].append(mz)
-
-        # Ensure each position has at least an empty list or single mass
-        # Convert empty lists to contain at least one value if we have any data
-        for ion_type in ion_types:
-            key = f'fragment_masses_{ion_type}'
-            for i in range(n):
-                if not result[key][i]:
-                    # Try to compute fallback using AASequence directly
-                    result[key][i] = []
-
-        return result
-
-    except Exception as e:
-        print(f"Error calculating fragments with TSG for {sequence_str}: {e}")
-        # Return empty structure
-        return {f'fragment_masses_{ion}': [] for ion in (ion_types or ['a', 'b', 'c', 'x', 'y', 'z'])}
-
-
-def calculate_fragment_masses(sequence_str: str) -> dict:
-    """Calculate theoretical fragment masses for a peptide using pyOpenMS.
-
-    This is a wrapper that uses TheoreticalSpectrumGenerator for accurate masses.
-    Falls back to direct AASequence calculation if TSG fails.
-
-    Returns:
-        Dict with fragment_masses_a, fragment_masses_b, etc.
-        Each is a list of lists (to support ambiguous modifications).
-    """
-    # First try TheoreticalSpectrumGenerator
-    result = calculate_fragment_masses_tsg(sequence_str)
-
-    # Check if we got valid results
-    has_data = any(
-        any(masses for masses in result.get(f'fragment_masses_{ion}', []))
-        for ion in ['a', 'b', 'c', 'x', 'y', 'z']
-    )
-
-    if has_data:
-        return result
-
-    # Fallback: use direct AASequence calculation (original method)
-    try:
-        from pyopenms import Residue
-        aa_seq = AASequence.fromString(sequence_str)
-        n = aa_seq.size()
-
-        fallback_result = {}
-
-        # Prefix ions (a, b, c)
-        for ion_type, res_type in [('a', Residue.ResidueType.AIon),
-                                    ('b', Residue.ResidueType.BIon),
-                                    ('c', Residue.ResidueType.CIon)]:
-            masses = []
-            for i in range(n):
-                prefix = aa_seq.getPrefix(i + 1)
-                mass = prefix.getMonoWeight(res_type, 0)
-                masses.append([mass])
-            fallback_result[f'fragment_masses_{ion_type}'] = masses
-
-        # Suffix ions (x, y, z)
-        for ion_type, res_type in [('x', Residue.ResidueType.XIon),
-                                    ('y', Residue.ResidueType.YIon),
-                                    ('z', Residue.ResidueType.ZIon)]:
-            masses = []
-            for i in range(n):
-                suffix = aa_seq.getSuffix(i + 1)
-                mass = suffix.getMonoWeight(res_type, 0)
-                masses.append([mass])
-            fallback_result[f'fragment_masses_{ion_type}'] = masses
-
-        return fallback_result
-
-    except Exception as e:
-        print(f"Error calculating fragments for {sequence_str}: {e}")
-        return {
-            'fragment_masses_a': [],
-            'fragment_masses_b': [],
-            'fragment_masses_c': [],
-            'fragment_masses_x': [],
-            'fragment_masses_y': [],
-            'fragment_masses_z': [],
-        }
 
 
 def extract_search_parameters(protein_ids: list) -> Dict[str, Any]:
@@ -366,52 +166,6 @@ def extract_search_parameters(protein_ids: list) -> Dict[str, Any]:
     return params
 
 
-def extract_peak_annotations(peptide_hit, id_idx: int) -> List[Dict[str, Any]]:
-    """Extract peak annotations from a PeptideHit using getPeakAnnotations() API.
-
-    Args:
-        peptide_hit: pyOpenMS PeptideHit object
-        id_idx: Index of the identification this hit belongs to
-
-    Returns:
-        List of dicts with: id_idx, mz, annotation, charge, ion_type
-    """
-    annotations = []
-
-    try:
-        peak_annotations = peptide_hit.getPeakAnnotations()
-
-        if not peak_annotations:
-            return annotations
-
-        for peak_ann in peak_annotations:
-            ann_mz = peak_ann.mz
-            ion_name = str(peak_ann.annotation) if hasattr(peak_ann, 'annotation') else ""
-            charge = peak_ann.charge if hasattr(peak_ann, 'charge') else 1
-
-            # Determine ion type from annotation name
-            ion_type = "unknown"
-            ion_name_lower = ion_name.lower()
-            for t in ['a', 'b', 'c', 'x', 'y', 'z']:
-                if ion_name_lower.startswith(t):
-                    ion_type = t
-                    break
-
-            annotations.append({
-                "id_idx": id_idx,
-                "mz": ann_mz,
-                "annotation": ion_name,
-                "charge": charge,
-                "ion_type": ion_type,
-            })
-
-    except Exception as e:
-        # getPeakAnnotations() may not be available or may fail
-        pass
-
-    return annotations
-
-
 def extract_idxml_to_parquet(
     idxml_path: Path,
     paths: dict,
@@ -421,10 +175,11 @@ def extract_idxml_to_parquet(
 
     Creates files:
     1. identifications.parquet - ID metadata (sequence, score, RT, etc.)
-    2. fragment_masses.parquet - Pre-computed fragment masses (using TSG)
-    3. peak_annotations.parquet - External peak annotations from search engine
-    4. search_params.json - Search parameters (tolerances, mods, enzyme)
-    5. id_info.json - Summary info
+    2. search_params.json - Search parameters (tolerances, mods, enzyme)
+    3. id_info.json - Summary info
+
+    Note: Fragment mass calculation is now handled by SequenceView in Vue,
+    so this function no longer precomputes fragment_masses.parquet.
 
     Args:
         idxml_path: Path to the idXML file
@@ -444,11 +199,9 @@ def extract_idxml_to_parquet(
     # Extract search parameters
     search_params = extract_search_parameters(protein_ids)
 
-    # Extract identification data and peak annotations
+    # Extract identification data
     id_data = []
-    all_peak_annotations = []
     unique_sequences = set()
-    has_external_annotations = False
 
     for idx, pep_id in enumerate(peptide_ids):
         rt = pep_id.getRT()  # Already in seconds
@@ -487,34 +240,6 @@ def extract_idxml_to_parquet(
             "scan_id": -1,  # Will be filled by linking
         })
 
-        # Extract external peak annotations
-        peak_anns = extract_peak_annotations(best_hit, idx)
-        if peak_anns:
-            has_external_annotations = True
-            all_peak_annotations.extend(peak_anns)
-
-    # Pre-compute fragment masses for all unique sequences using TSG
-    if status_callback:
-        status_callback(f"Computing fragment masses for {len(unique_sequences)} unique sequences...")
-
-    fragment_data = []
-    for i, sequence in enumerate(unique_sequences):
-        if status_callback and (i + 1) % 100 == 0:
-            status_callback(f"Computing fragments: {i + 1}/{len(unique_sequences)}")
-
-        frag_masses = calculate_fragment_masses(sequence)
-        # Store as JSON strings for the list columns
-        fragment_data.append({
-            "sequence": sequence,
-            "theoretical_mass": calculate_peptide_mass(sequence),
-            "fragment_masses_a": json.dumps(frag_masses.get("fragment_masses_a", [])),
-            "fragment_masses_b": json.dumps(frag_masses.get("fragment_masses_b", [])),
-            "fragment_masses_c": json.dumps(frag_masses.get("fragment_masses_c", [])),
-            "fragment_masses_x": json.dumps(frag_masses.get("fragment_masses_x", [])),
-            "fragment_masses_y": json.dumps(frag_masses.get("fragment_masses_y", [])),
-            "fragment_masses_z": json.dumps(frag_masses.get("fragment_masses_z", [])),
-        })
-
     if status_callback:
         status_callback("Writing parquet files...")
 
@@ -540,35 +265,6 @@ def extract_idxml_to_parquet(
             "scan_id": pl.Series([], dtype=pl.Int32),
         }).write_parquet(paths["identifications"])
 
-    # Write fragment masses DataFrame
-    if fragment_data:
-        frag_df = pl.DataFrame(fragment_data)
-        frag_df.write_parquet(paths["fragment_masses"])
-    else:
-        pl.DataFrame({
-            "sequence": pl.Series([], dtype=pl.Utf8),
-            "theoretical_mass": pl.Series([], dtype=pl.Float64),
-            "fragment_masses_a": pl.Series([], dtype=pl.Utf8),
-            "fragment_masses_b": pl.Series([], dtype=pl.Utf8),
-            "fragment_masses_c": pl.Series([], dtype=pl.Utf8),
-            "fragment_masses_x": pl.Series([], dtype=pl.Utf8),
-            "fragment_masses_y": pl.Series([], dtype=pl.Utf8),
-            "fragment_masses_z": pl.Series([], dtype=pl.Utf8),
-        }).write_parquet(paths["fragment_masses"])
-
-    # Write peak annotations DataFrame
-    if all_peak_annotations:
-        ann_df = pl.DataFrame(all_peak_annotations)
-        ann_df.write_parquet(paths["peak_annotations"])
-    else:
-        pl.DataFrame({
-            "id_idx": pl.Series([], dtype=pl.Int64),
-            "mz": pl.Series([], dtype=pl.Float64),
-            "annotation": pl.Series([], dtype=pl.Utf8),
-            "charge": pl.Series([], dtype=pl.Int32),
-            "ion_type": pl.Series([], dtype=pl.Utf8),
-        }).write_parquet(paths["peak_annotations"])
-
     # Write search parameters
     with open(paths["search_params"], "w") as f:
         json.dump(search_params, f, indent=2)
@@ -578,18 +274,13 @@ def extract_idxml_to_parquet(
         "num_identifications": len(id_data),
         "num_unique_sequences": len(unique_sequences),
         "num_proteins": len(protein_ids),
-        "has_external_annotations": has_external_annotations,
-        "num_annotations": len(all_peak_annotations),
         "search_engine": search_params.get("search_engine", ""),
     }
     with open(paths["id_info"], "w") as f:
         json.dump(id_info, f, indent=2)
 
     if status_callback:
-        msg = f"Extracted {len(id_data)} identifications ({len(unique_sequences)} unique sequences)"
-        if has_external_annotations:
-            msg += f", {len(all_peak_annotations)} peak annotations"
-        status_callback(msg)
+        status_callback(f"Extracted {len(id_data)} identifications ({len(unique_sequences)} unique sequences)")
 
 
 def link_identifications_to_spectra(
@@ -681,474 +372,6 @@ def load_search_params(paths: dict) -> Dict[str, Any]:
         "fragment_mass_tolerance": 0.05,
         "fragment_mass_tolerance_ppm": False,
     }
-
-
-def load_peak_annotations(paths: dict, id_idx: int) -> Optional[pl.DataFrame]:
-    """Load external peak annotations for a specific identification.
-
-    Args:
-        paths: Cache paths dict
-        id_idx: Identification index to filter by
-
-    Returns:
-        DataFrame with peak annotations for this ID, or None if not available
-    """
-    ann_path = paths.get("peak_annotations")
-    if not ann_path or not Path(ann_path).exists():
-        return None
-
-    try:
-        ann_df = pl.read_parquet(ann_path)
-        if ann_df.height == 0:
-            return None
-
-        filtered = ann_df.filter(pl.col("id_idx") == id_idx)
-        if filtered.height == 0:
-            return None
-
-        return filtered
-    except Exception:
-        return None
-
-
-def _parse_openms_sequence(sequence_str: str) -> Tuple[List[str], List[Optional[float]]]:
-    """Parse OpenMS sequence format to extract residues and modification mass shifts.
-
-    Converts e.g. 'SHC(Carbamidomethyl)IAEVEK' to:
-    - residues: ['S', 'H', 'C', 'I', 'A', 'E', 'V', 'E', 'K']
-    - modifications: [None, None, 57.02, None, None, None, None, None, None]
-
-    Args:
-        sequence_str: Peptide sequence in OpenMS format with modifications in parentheses
-
-    Returns:
-        Tuple of (residues list, modifications list where None means unmodified)
-    """
-    try:
-        aa_seq = AASequence.fromString(sequence_str)
-        residues = []
-        modifications = []
-
-        for i in range(aa_seq.size()):
-            residue = aa_seq.getResidue(i)
-            one_letter = residue.getOneLetterCode()
-            residues.append(one_letter)
-
-            mod = residue.getModification()
-            if mod:
-                diff_mono = mod.getDiffMonoMass()
-                modifications.append(round(diff_mono, 2))
-            else:
-                modifications.append(None)
-
-        return residues, modifications
-    except Exception:
-        # On any error, fallback to extracting single letters
-        residues = []
-        modifications = []
-        i = 0
-        while i < len(sequence_str):
-            if sequence_str[i].isupper():
-                residues.append(sequence_str[i])
-                modifications.append(None)
-                i += 1
-            elif sequence_str[i] == '(':
-                end = sequence_str.find(')', i)
-                if end > i:
-                    i = end + 1
-                else:
-                    i += 1
-            else:
-                i += 1
-        return residues, modifications
-
-
-def get_sequence_data_for_identification(
-    id_row: dict,
-    peaks_df: pl.DataFrame,
-    fragment_masses_df: Optional[pl.DataFrame] = None,
-    peak_annotations_df: Optional[pl.DataFrame] = None,
-    search_params: Optional[Dict[str, Any]] = None,
-) -> Tuple[dict, List[float], float]:
-    """Get sequence data and observed masses for a specific identification.
-
-    Args:
-        id_row: Dictionary with identification data (from id_df.row())
-        peaks_df: DataFrame with all peaks data
-        fragment_masses_df: Optional pre-computed fragment masses DataFrame.
-            If provided, looks up cached masses instead of computing.
-        peak_annotations_df: Optional external peak annotations DataFrame.
-            If provided, includes external annotations in the result.
-        search_params: Optional search parameters dict.
-
-    Returns:
-        Tuple of (sequence_data dict, observed_masses list, precursor_mass)
-
-    The sequence_data dict contains:
-        - sequence: List of amino acid characters
-        - modifications: List of mass shifts per position (None for unmodified)
-        - theoretical_mass: Peptide mass
-        - fixed_modifications: List of modifications
-        - fragment_masses_[a,b,c,x,y,z]: Pre-computed fragment masses
-        - external_annotations: List of external peak annotations (if available)
-        - fragment_tolerance: Tolerance value from search params
-        - fragment_tolerance_ppm: Whether tolerance is in ppm
-    """
-    sequence = id_row["sequence"]
-    scan_id = id_row["scan_id"]
-    id_idx = id_row.get("id_idx", -1)
-    precursor_mass = id_row.get("theoretical_mass", 0.0)
-
-    # Parse sequence to extract residues and modification mass shifts
-    residues, modifications = _parse_openms_sequence(sequence)
-
-    # Try to get pre-computed fragment masses from cache
-    if fragment_masses_df is not None:
-        cached_row = fragment_masses_df.filter(pl.col("sequence") == sequence)
-        if cached_row.height > 0:
-            row = cached_row.row(0, named=True)
-            sequence_data = {
-                "sequence": residues,
-                "modifications": modifications,
-                "theoretical_mass": row.get("theoretical_mass", precursor_mass),
-                "fixed_modifications": [],
-                "fragment_masses_a": json.loads(row["fragment_masses_a"]),
-                "fragment_masses_b": json.loads(row["fragment_masses_b"]),
-                "fragment_masses_c": json.loads(row["fragment_masses_c"]),
-                "fragment_masses_x": json.loads(row["fragment_masses_x"]),
-                "fragment_masses_y": json.loads(row["fragment_masses_y"]),
-                "fragment_masses_z": json.loads(row["fragment_masses_z"]),
-            }
-        else:
-            # Fallback: compute if not in cache
-            fragment_data = calculate_fragment_masses(sequence)
-            sequence_data = {
-                "sequence": residues,
-                "modifications": modifications,
-                "theoretical_mass": precursor_mass,
-                "fixed_modifications": [],
-                **fragment_data,
-            }
-    else:
-        # No cache provided, compute fragment masses
-        fragment_data = calculate_fragment_masses(sequence)
-        sequence_data = {
-            "sequence": residues,
-            "modifications": modifications,
-            "theoretical_mass": precursor_mass,
-            "fixed_modifications": [],
-            **fragment_data,
-        }
-
-    # Add external peak annotations if available
-    if peak_annotations_df is not None and id_idx >= 0:
-        id_anns = peak_annotations_df.filter(pl.col("id_idx") == id_idx)
-        if id_anns.height > 0:
-            sequence_data["external_annotations"] = id_anns.to_dicts()
-
-    # Add search parameters if available
-    if search_params:
-        sequence_data["fragment_tolerance"] = search_params.get("fragment_mass_tolerance", 0.05)
-        sequence_data["fragment_tolerance_ppm"] = search_params.get("fragment_mass_tolerance_ppm", False)
-
-    # Get observed masses from peaks
-    observed_masses = []
-    if scan_id > 0:
-        spectrum_peaks = peaks_df.filter(pl.col("scan_id") == scan_id)
-        if spectrum_peaks.height > 0:
-            observed_masses = spectrum_peaks["mass"].to_list()
-
-    return sequence_data, observed_masses, id_row.get("precursor_mz", 0.0)
-
-
-PROTON_MASS = 1.007276  # Daltons
-
-
-def compute_peak_annotations_for_spectrum(
-    peaks_df: pl.DataFrame,
-    scan_id: int,
-    sequence_data: dict,
-    precursor_charge: int = 2,
-    tolerance: float = 20.0,
-    tolerance_ppm: bool = True,
-    ion_types: Optional[List[str]] = None,
-) -> Dict[int, Dict[str, Any]]:
-    """Compute fragment ion annotations for peaks in a spectrum.
-
-    Matches observed peaks against theoretical fragment masses considering
-    charge states from 1 to precursor_charge.
-
-    Args:
-        peaks_df: DataFrame with all peaks (must have scan_id, mass, intensity columns)
-        scan_id: Scan ID to filter peaks for
-        sequence_data: Dict with fragment_masses_[a,b,c,x,y,z] (from get_sequence_data_for_identification)
-        precursor_charge: Maximum charge state to consider
-        tolerance: Mass tolerance for matching
-        tolerance_ppm: If True, tolerance is in ppm; if False, in Daltons
-        ion_types: List of ion types to consider (default: ['b', 'y'])
-
-    Returns:
-        Dict mapping peak index to annotation data:
-        {index: {'highlight': True, 'annotation': 'b3¹⁺'}, ...}
-        Can be passed directly to LinePlot.set_dynamic_annotations()
-    """
-    if ion_types is None:
-        ion_types = ['b', 'y']  # Most common ion types
-
-    # Filter to spectrum peaks
-    spectrum_peaks = peaks_df.filter(pl.col("scan_id") == scan_id)
-    if spectrum_peaks.height == 0:
-        return {}
-
-    # Get observed m/z values and peak_ids as numpy arrays
-    observed_mz = spectrum_peaks["mass"].to_numpy()
-    peak_ids = spectrum_peaks["peak_id"].to_numpy()
-
-    # Superscript digits for charge display
-    superscript = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-                   '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'}
-
-    def to_superscript(n: int) -> str:
-        return ''.join(superscript.get(d, d) for d in str(n))
-
-    # Initialize result dict: index -> {highlight, annotation}
-    annotations_dict: Dict[int, Dict[str, Any]] = {}
-
-    # Build list of theoretical fragments with their labels
-    # Each entry: (theoretical_mz, label, ion_type, ion_number)
-    theoretical_fragments = []
-
-    for ion_type in ion_types:
-        key = f"fragment_masses_{ion_type}"
-        fragment_list = sequence_data.get(key, [])
-
-        for ion_number, masses in enumerate(fragment_list, start=1):
-            if not masses:
-                continue
-
-            # masses is a list (can have multiple for ambiguous mods)
-            for neutral_mass in masses:
-                if neutral_mass <= 0:
-                    continue
-
-                # Generate m/z for each charge state
-                for charge in range(1, precursor_charge + 1):
-                    theoretical_mz = (neutral_mass + charge * PROTON_MASS) / charge
-                    charge_str = to_superscript(charge) + "⁺"
-                    label = f"{ion_type}{ion_number}{charge_str}"
-                    theoretical_fragments.append((theoretical_mz, label, ion_type, ion_number))
-
-    # Match observed peaks to theoretical fragments
-    for frag_mz, label, ion_type, ion_number in theoretical_fragments:
-        # Find peaks within tolerance
-        if tolerance_ppm:
-            tol_da = frag_mz * tolerance / 1e6
-        else:
-            tol_da = tolerance
-
-        for idx, obs_mz in enumerate(observed_mz):
-            mass_diff = abs(obs_mz - frag_mz)
-            if mass_diff <= tol_da:
-                # Use peak_id as key (stable identifier, independent of row order)
-                peak_id = int(peak_ids[idx])
-                if peak_id not in annotations_dict:
-                    annotations_dict[peak_id] = {'highlight': True, 'annotation': label}
-                else:
-                    # Peak already matched - append this annotation if different
-                    existing = annotations_dict[peak_id]['annotation']
-                    if label not in existing:
-                        annotations_dict[peak_id]['annotation'] = f"{existing}/{label}"
-
-    return annotations_dict
-
-
-def precompute_spectrum_annotations(
-    peaks_df: pl.DataFrame,
-    id_paths: dict,
-    output_path: Path,
-    status_callback: Optional[Callable[[str], None]] = None
-) -> bool:
-    """Precompute unified spectrum plot with annotation columns.
-
-    Creates a spectrum plot parquet file that includes annotation columns
-    (highlight, annotation) and an id_idx column for filtering:
-    - id_idx = -1: Base/unannotated peaks (for all spectra)
-    - id_idx = N: Annotated peaks for identification N
-
-    This allows a single LinePlot to show either unannotated or annotated
-    spectra based on the identification filter value.
-
-    Args:
-        peaks_df: DataFrame with all peaks (must have peak_id, scan_id, mass, intensity)
-        id_paths: Dict with paths to identification data files
-        output_path: Path to write the unified spectrum plot parquet
-        status_callback: Optional callback for progress messages
-
-    Returns:
-        True if file was created successfully
-    """
-    # Load base spectrum plot data
-    spectrum_plot_cols = ["peak_id", "scan_id", "mass", "intensity"]
-    base_df = peaks_df.select(spectrum_plot_cols).filter(pl.col("intensity") > 0)
-
-    # Define consistent column order for output
-    output_columns = ["peak_id", "scan_id", "mass", "intensity", "id_idx", "highlight", "annotation"]
-
-    # Create base rows for ALL spectra with id_idx = -1 (unannotated)
-    base_with_empty_annotations = base_df.with_columns([
-        pl.lit(-1).cast(pl.Int32).alias("id_idx"),
-        pl.lit(False).alias("highlight"),
-        pl.lit("").alias("annotation"),
-    ]).select(output_columns)
-
-    # Check if identification data exists
-    if not id_paths.get("identifications") or not Path(id_paths["identifications"]).exists():
-        if status_callback:
-            status_callback("No identification data found, creating base spectrum plot only")
-        base_with_empty_annotations.write_parquet(output_path)
-        return True
-
-    # Load identification data
-    id_df = pl.read_parquet(id_paths["identifications"])
-    if id_df.height == 0:
-        if status_callback:
-            status_callback("No identifications found, creating base spectrum plot only")
-        base_with_empty_annotations.write_parquet(output_path)
-        return True
-
-    # Load fragment masses
-    fragment_masses_path = id_paths.get("fragment_masses")
-    if not fragment_masses_path or not Path(fragment_masses_path).exists():
-        if status_callback:
-            status_callback("No fragment masses found, skipping annotation precompute")
-        return False
-
-    fragment_masses_df = pl.read_parquet(fragment_masses_path)
-
-    # Load search params for tolerance
-    search_params = {}
-    search_params_path = id_paths.get("search_params")
-    if search_params_path and Path(search_params_path).exists():
-        with open(search_params_path) as f:
-            search_params = json.load(f)
-
-    tolerance = search_params.get("fragment_mass_tolerance", 20.0)
-    tolerance_ppm = search_params.get("fragment_mass_tolerance_ppm", True)
-
-    if status_callback:
-        status_callback(f"Computing annotations for {id_df.height} identifications...")
-
-    # Collect all annotations
-    all_annotations = []
-
-    for row in id_df.iter_rows(named=True):
-        id_idx = row["id_idx"]
-        scan_id = row.get("scan_id", -1)
-        sequence = row.get("sequence", "")
-
-        if scan_id < 0 or not sequence:
-            continue
-
-        # Get fragment masses for this sequence (fragment_masses keyed by sequence, not id_idx)
-        frag_row = fragment_masses_df.filter(pl.col("sequence") == sequence)
-        if frag_row.height == 0:
-            continue
-
-        frag_data = frag_row.row(0, named=True)
-
-        # Build sequence_data dict for compute_peak_annotations_for_spectrum
-        sequence_data = {
-            "fragment_masses_b": json.loads(frag_data.get("fragment_masses_b", "[]")),
-            "fragment_masses_y": json.loads(frag_data.get("fragment_masses_y", "[]")),
-        }
-
-        # Compute annotations for this identification
-        precursor_charge = row.get("charge", 2)
-        annotations = compute_peak_annotations_for_spectrum(
-            peaks_df,
-            scan_id,
-            sequence_data,
-            precursor_charge=precursor_charge,
-            tolerance=tolerance,
-            tolerance_ppm=tolerance_ppm,
-        )
-
-        # Add to collection with id_idx
-        for peak_id, ann_data in annotations.items():
-            all_annotations.append({
-                "id_idx": id_idx,
-                "peak_id": peak_id,
-                "highlight": ann_data.get("highlight", False),
-                "annotation": ann_data.get("annotation", ""),
-            })
-
-    if not all_annotations:
-        if status_callback:
-            status_callback("No peak annotations computed")
-        return False
-
-    # Create annotations DataFrame
-    ann_df = pl.DataFrame(all_annotations)
-
-    # Load base spectrum plot data
-    spectrum_plot_cols = ["peak_id", "scan_id", "mass", "intensity"]
-    base_df = peaks_df.select(spectrum_plot_cols).filter(pl.col("intensity") > 0)
-
-    # Get unique scan_ids that have identifications
-    id_scan_ids = id_df.filter(pl.col("scan_id") > 0).select("id_idx", "scan_id").unique()
-
-    # Create annotated data by joining peaks with annotations per identification
-    # For each (id_idx, scan_id) pair, join the peaks with their annotations
-    annotated_dfs = []
-
-    for row in id_scan_ids.iter_rows(named=True):
-        id_idx = row["id_idx"]
-        scan_id = row["scan_id"]
-
-        # Get peaks for this scan
-        scan_peaks = base_df.filter(pl.col("scan_id") == scan_id)
-        if scan_peaks.height == 0:
-            continue
-
-        # Get annotations for this identification
-        id_annotations = ann_df.filter(pl.col("id_idx") == id_idx)
-
-        # Left join to keep all peaks, adding annotation columns
-        annotated = scan_peaks.join(
-            id_annotations.select(["peak_id", "highlight", "annotation"]),
-            on="peak_id",
-            how="left"
-        ).with_columns([
-            pl.lit(id_idx).alias("id_idx"),
-            pl.col("highlight").fill_null(False),
-            pl.col("annotation").fill_null(""),
-        ]).select(output_columns)
-
-        annotated_dfs.append(annotated)
-
-    # base_with_empty_annotations was already created at the start of the function
-
-    # Combine base rows with annotated rows
-    if annotated_dfs:
-        # Concatenate annotated data
-        annotated_df = pl.concat(annotated_dfs)
-        # Combine base (id_idx=-1) with annotated (id_idx=N)
-        result_df = pl.concat([base_with_empty_annotations, annotated_df])
-        if status_callback:
-            status_callback(
-                f"Created unified spectrum plot: {base_with_empty_annotations.height} base + "
-                f"{annotated_df.height} annotated = {result_df.height} total rows"
-            )
-    else:
-        # No identifications matched - just use base data
-        result_df = base_with_empty_annotations
-        if status_callback:
-            status_callback(f"Created unified spectrum plot with {result_df.height} base rows (no annotations)")
-
-    # Write to parquet
-    result_df.write_parquet(output_path)
-
-    return True
 
 
 def find_matching_idxml(mzml_path: Path, workspace: Path) -> Optional[Path]:

@@ -142,6 +142,50 @@ def create_component_inputs(
         status_callback("Component inputs created")
 
 
+def create_spectra_table_with_ids(
+    paths: dict,
+    id_df: pl.DataFrame,
+    im_info: dict,
+    status_callback: Optional[Callable[[str], None]] = None
+) -> None:
+    """Create spectra table with identification counts column.
+
+    This creates a variant of spectra_table that includes a 'num_ids' column
+    showing how many identifications are linked to each spectrum.
+
+    Args:
+        paths: Dictionary of cache paths from get_cache_paths()
+        id_df: DataFrame with identification data (must have scan_id column)
+        im_info: Ion mobility info dict
+        status_callback: Optional callback for progress updates
+    """
+    if status_callback:
+        status_callback("Creating spectra table with ID counts...")
+
+    has_im = im_info.get("type") != "none"
+
+    # Count identifications per scan_id
+    id_counts = (
+        id_df.filter(pl.col("scan_id") > 0)
+        .group_by("scan_id")
+        .agg(pl.len().alias("num_ids"))
+    )
+
+    # Read base spectra table and join with id counts
+    spectra_df = pl.read_parquet(paths["spectra_table"])
+    spectra_df = spectra_df.join(id_counts, on="scan_id", how="left")
+    spectra_df = spectra_df.with_columns(
+        pl.col("num_ids").fill_null(0).cast(pl.Int32)
+    )
+
+    # Write to spectra_table_with_ids.parquet
+    spectra_df.write_parquet(paths["spectra_table_with_ids"])
+
+    if status_callback:
+        num_with_ids = spectra_df.filter(pl.col("num_ids") > 0).height
+        status_callback(f"Created spectra table with {num_with_ids} spectra having IDs")
+
+
 def _create_im_summary_table(paths: dict, im_info: dict) -> None:
     """Create ion mobility summary table with statistics per IM dimension.
 

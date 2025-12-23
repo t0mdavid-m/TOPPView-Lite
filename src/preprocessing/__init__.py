@@ -9,6 +9,7 @@ from .extraction import (
 from .component_inputs import (
     component_cache_is_valid,
     create_component_inputs,
+    create_spectra_table_with_ids,
     load_im_info,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "detect_ion_mobility_type",
     "component_cache_is_valid",
     "create_component_inputs",
+    "create_spectra_table_with_ids",
     "load_im_info",
 ]

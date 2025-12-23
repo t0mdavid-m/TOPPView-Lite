@@ -14,13 +14,13 @@ from src.common.common import (
 from src import fileupload
 from src.preprocessing import (
     get_cache_paths, raw_cache_is_valid, extract_mzml_to_parquet,
-    component_cache_is_valid, create_component_inputs, load_im_info,
+    component_cache_is_valid, create_component_inputs, create_spectra_table_with_ids, load_im_info,
 )
 from src.preprocessing.identification import (
     get_id_cache_paths, id_cache_is_valid, extract_idxml_to_parquet,
-    link_identifications_to_spectra, find_matching_idxml,
+    link_identifications_to_spectra, find_matching_idxml, load_search_params,
 )
-from src.components import create_components
+from src.components.factory import create_ms_components, create_id_components
 import polars as pl
 
 params = page_setup()
@@ -50,6 +50,8 @@ def process_idxml_file(idxml_path: Path) -> bool:
             st.warning(f"mzML file {mzml_path.name} needs to be preprocessed first")
             return False
 
+        im_info = load_im_info(paths)
+
         # Process idXML
         id_paths = get_id_cache_paths(st.session_state.workspace, idxml_path)
         if not id_cache_is_valid(idxml_path, id_paths):
@@ -64,6 +66,16 @@ def process_idxml_file(idxml_path: Path) -> bool:
                 id_df, metadata_df, status_callback=lambda msg: st.write(msg)
             )
             linked_df.write_parquet(id_paths["identifications"])
+
+            # Create spectra_table_with_ids
+            st.write("Creating spectra table with ID counts...")
+            create_spectra_table_with_ids(paths, linked_df, im_info, lambda msg: st.write(msg))
+
+            # Create ID components
+            st.write("Creating identification components...")
+            search_params = load_search_params(id_paths)
+            create_id_components(paths, id_paths, im_info, file_id=mzml_path.stem, search_params=search_params)
+
             st.success(f"Processed {idxml_path.name}")
         else:
             st.info(f"{idxml_path.name} already processed")
@@ -113,6 +125,11 @@ def preprocess_file(mzml_path: Path) -> bool:
                 st.write("Creating component inputs...")
                 create_component_inputs(paths, lambda msg: st.write(msg))
 
+            im_info = load_im_info(paths)
+            has_ids = False
+            id_paths = None
+            search_params = None
+
             # Check for matching idXML and process if found
             idxml_path = find_matching_idxml(mzml_path, st.session_state.workspace)
             if idxml_path:
@@ -131,10 +148,23 @@ def preprocess_file(mzml_path: Path) -> bool:
                     )
                     linked_df.write_parquet(id_paths["identifications"])
 
+                # Create spectra_table_with_ids for ID count column
+                st.write("Creating spectra table with ID counts...")
+                id_df = pl.read_parquet(id_paths["identifications"])
+                create_spectra_table_with_ids(paths, id_df, im_info, lambda msg: st.write(msg))
+
+                has_ids = True
+                search_params = load_search_params(id_paths)
+
             st.write("Pre-computing visualization caches...")
-            im_info = load_im_info(paths)
-            # Use file_id to match cache_ids expected by viewer.py
-            create_components(paths, im_info, file_id=mzml_path.stem)
+            # Create MS components
+            create_ms_components(paths, im_info, file_id=mzml_path.stem)
+
+            # Create ID components if identifications exist
+            if has_ids and id_paths:
+                st.write("Creating identification components...")
+                create_id_components(paths, id_paths, im_info, file_id=mzml_path.stem, search_params=search_params)
+
             status.update(label=f"Processed {mzml_path.name}", state="complete")
         return True
     except Exception as e:
