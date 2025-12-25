@@ -28,5 +28,5 @@ jobs:
         pip install pytest
     - name: Test
       run: |
-        python -m pytest test_gui.py tests/
+        python -m pytest tests/
 
