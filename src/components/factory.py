@@ -26,18 +26,21 @@ def create_ms_components(
 
     Returns:
         Dict with keys: im_table, spectra_table, peaks_table, spectrum_plot, heatmap
-        im_table is None if no ion mobility data is present.
+        im_table is None if no ion mobility data or only one IM dimension.
     """
     has_im = im_info.get("type") != "none"
+    num_im_dimensions = im_info.get("num_dimensions", 0)
+    # Only enable IM filtering when multiple dimensions exist
+    use_im_filter = has_im and num_im_dimensions > 1
     cache_path = str(paths["component_cache"])
     prefix = f"{file_id}_" if file_id else ""
 
     # Ensure component cache directory exists
     paths["component_cache"].mkdir(parents=True, exist_ok=True)
 
-    # Ion Mobility Table (optional)
+    # Ion Mobility Table (only if multiple IM dimensions to filter by)
     im_table = None
-    if has_im and paths["im_table"].exists():
+    if use_im_filter and paths["im_table"].exists():
         im_table = Table(
             cache_id=f"{prefix}im_table",
             data_path=str(paths["im_table"]),
@@ -62,7 +65,7 @@ def create_ms_components(
         )
 
     # Spectra Table (basic, without ID counts)
-    spectra_filters = {"im_dimension": "im_id"} if has_im else None
+    spectra_filters = {"im_dimension": "im_id"} if use_im_filter else None
     spectra_table = Table(
         cache_id=f"{prefix}spectra_table",
         data_path=str(paths["spectra_table"]),
@@ -98,7 +101,7 @@ def create_ms_components(
 
     # Peaks Table
     peaks_filters = {"spectrum": "scan_id"}
-    if has_im:
+    if use_im_filter:
         peaks_filters["im_dimension"] = "im_id"
 
     peaks_table = Table(
@@ -131,7 +134,7 @@ def create_ms_components(
 
     # Spectrum Plot (basic, without annotations)
     plot_filters = {"spectrum": "scan_id"}
-    if has_im:
+    if use_im_filter:
         plot_filters["im_dimension"] = "im_id"
 
     spectrum_plot = LinePlot(
@@ -152,8 +155,8 @@ def create_ms_components(
     )
 
     # Heatmap - data_path triggers subprocess preprocessing for memory efficiency
-    heatmap_filters = {"im_dimension": "im_id"} if has_im else None
-    categorical_filters = ["im_dimension"] if has_im else None
+    heatmap_filters = {"im_dimension": "im_id"} if use_im_filter else None
+    categorical_filters = ["im_dimension"] if use_im_filter else None
 
     heatmap = Heatmap(
         cache_id=f"{prefix}peaks_heatmap",
@@ -207,6 +210,9 @@ def create_id_components(
         Dict with keys: spectra_table_with_ids, id_table, sequence_view, annotated_spectrum_plot
     """
     has_im = im_info.get("type") != "none"
+    num_im_dimensions = im_info.get("num_dimensions", 0)
+    # Only enable IM filtering when multiple dimensions exist
+    use_im_filter = has_im and num_im_dimensions > 1
     cache_path = str(paths["component_cache"])
     prefix = f"{file_id}_" if file_id else ""
 
@@ -214,7 +220,7 @@ def create_id_components(
     id_df = pl.read_parquet(id_paths["identifications"])
 
     # Spectra Table with ID counts
-    spectra_filters = {"im_dimension": "im_id"} if has_im else None
+    spectra_filters = {"im_dimension": "im_id"} if use_im_filter else None
     spectra_table_with_ids = Table(
         cache_id=f"{prefix}spectra_table_with_ids",
         data_path=str(paths["spectra_table_with_ids"]),
@@ -277,7 +283,7 @@ def create_id_components(
     annotation_config = {
         "ion_types": ["b", "y"],
         "neutral_losses": True,
-        "proton_loss_addition": False,
+        "proton_loss_addition": True,
         "tolerance": 20.0,
         "tolerance_ppm": True,
     }
@@ -337,7 +343,7 @@ def create_id_components(
 def reconstruct_ms_components(
     cache_path: str,
     file_id: str = "",
-    has_im: bool = False,
+    num_im_dimensions: int = 0,
 ) -> Dict[str, Any]:
     """Reconstruct MS components from cache (no data needed).
 
@@ -347,7 +353,7 @@ def reconstruct_ms_components(
     Args:
         cache_path: Path to component cache directory
         file_id: File identifier used when creating components
-        has_im: Whether ion mobility data is present
+        num_im_dimensions: Number of ion mobility dimensions (table shown if > 1)
 
     Returns:
         Dict with keys: im_table, spectra_table, peaks_table, spectrum_plot, heatmap
@@ -355,8 +361,9 @@ def reconstruct_ms_components(
     prefix = f"{file_id}_" if file_id else ""
 
     # Reconstruct from cache (only cache_id and cache_path needed)
+    # Only reconstruct IM table if multiple dimensions exist
     im_table = None
-    if has_im:
+    if num_im_dimensions > 1:
         try:
             im_table = Table(cache_id=f"{prefix}im_table", cache_path=cache_path)
         except Exception:

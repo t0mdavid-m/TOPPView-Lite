@@ -90,6 +90,7 @@ if file_changed:
 paths = get_cache_paths(st.session_state.workspace, selected_file)
 im_info = load_im_info(paths)
 has_im = im_info.get("type") != "none"
+num_im_dimensions = im_info.get("num_dimensions", 0)
 file_id = selected_file.stem
 cache_path = str(paths["component_cache"])
 
@@ -122,7 +123,7 @@ if component_cache_key not in st.session_state or file_changed:
     with st.spinner("Loading visualization components..."):
         # Try to reconstruct from cache first
         try:
-            ms_components = reconstruct_ms_components(cache_path, file_id, has_im)
+            ms_components = reconstruct_ms_components(cache_path, file_id, num_im_dimensions)
         except Exception:
             # Fall back to creating components
             ms_components = create_ms_components(paths, im_info, file_id)

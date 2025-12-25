@@ -211,7 +211,7 @@ class TestReconstructMsComponents:
         result = reconstruct_ms_components(
             cache_path="/path/to/cache",
             file_id="test",
-            has_im=False
+            num_im_dimensions=0
         )
 
         assert "spectra_table" in result
@@ -232,17 +232,32 @@ class TestReconstructMsComponents:
     @patch('src.components.factory.Table')
     @patch('src.components.factory.LinePlot')
     @patch('src.components.factory.Heatmap')
-    def test_reconstructs_im_table_when_has_im(self, mock_heatmap, mock_lineplot, mock_table):
-        """Test that IM table is reconstructed when has_im=True."""
+    def test_reconstructs_im_table_when_multiple_dimensions(self, mock_heatmap, mock_lineplot, mock_table):
+        """Test that IM table is reconstructed when num_im_dimensions > 1."""
         from src.components.factory import reconstruct_ms_components
 
         result = reconstruct_ms_components(
             cache_path="/path/to/cache",
             file_id="test",
-            has_im=True
+            num_im_dimensions=3
         )
 
         assert result["im_table"] is not None
+
+    @patch('src.components.factory.Table')
+    @patch('src.components.factory.LinePlot')
+    @patch('src.components.factory.Heatmap')
+    def test_no_im_table_with_single_dimension(self, mock_heatmap, mock_lineplot, mock_table):
+        """Test that IM table is not reconstructed when only one dimension."""
+        from src.components.factory import reconstruct_ms_components
+
+        result = reconstruct_ms_components(
+            cache_path="/path/to/cache",
+            file_id="test",
+            num_im_dimensions=1
+        )
+
+        assert result["im_table"] is None
 
 
 class TestReconstructIdComponents:
