@@ -21,8 +21,7 @@ from openms_insight import StateManager
 from openms_insight.rendering.bridge import clear_component_cache
 
 from src.common.common import page_setup
-from src.preprocessing import get_cache_paths, raw_cache_is_valid, component_cache_is_valid, load_im_info
-from src.preprocessing.pipeline import preprocess_file
+from src.preprocessing import get_cache_paths, raw_cache_is_valid, component_cache_is_valid, load_im_info, preprocess_file
 from src.preprocessing.identification import (
     get_id_cache_paths,
     id_cache_is_valid,

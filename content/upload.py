@@ -15,12 +15,12 @@ from src import fileupload
 from src.preprocessing import (
     get_cache_paths, raw_cache_is_valid,
     component_cache_is_valid, load_im_info,
+    create_spectra_table_with_ids, preprocess_file,
 )
 from src.preprocessing.identification import (
     get_id_cache_paths, id_cache_is_valid, extract_idxml_to_parquet,
     link_identifications_to_spectra, find_matching_idxml, load_search_params,
 )
-from src.preprocessing.pipeline import preprocess_file
 from src.components.factory import create_id_components
 import polars as pl
 
