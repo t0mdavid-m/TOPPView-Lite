@@ -240,8 +240,8 @@ def page_setup(page: str = "") -> dict[str, Any]:
                 # Check shared exports volume first (for cross-app integration)
                 shared_path = st.session_state.settings.get("shared_exports_path", "")
                 if shared_path:
-                    # Resolve to absolute path for consistent behavior in Docker
-                    shared_workspace = Path(shared_path).resolve() / workspace_name
+                    # Use path directly - should be absolute in production (e.g. /shared-exports/)
+                    shared_workspace = Path(shared_path) / workspace_name
                     if shared_workspace.exists() and (shared_workspace / "mzML-files").exists():
                         st.session_state.workspace = shared_workspace
                         st.session_state.workspace_source = "shared"
@@ -256,7 +256,7 @@ def page_setup(page: str = "") -> dict[str, Any]:
                         st.session_state.workspace_source = "local"
                         # Log warning in online mode when shared workspace expected but not found
                         if st.session_state.location == "online":
-                            st.warning(f"Shared workspace not found at {shared_workspace}. Using local workspace.")
+                            st.warning(f"Shared workspace not found. Path from settings: '{shared_path}', resolved to: {shared_workspace}")
                 else:
                     st.session_state.workspace = Path(workspaces_dir, workspace_name)
                     st.session_state.workspace_source = "local"
