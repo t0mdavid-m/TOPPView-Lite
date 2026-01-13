@@ -238,15 +238,35 @@ def page_setup(page: str = "") -> dict[str, Any]:
         # Check if workspace logic is enabled
         if st.session_state.settings["enable_workspaces"]:
             if "workspace" in st.query_params:
-                st.session_state.workspace = Path(
-                    workspaces_dir, st.query_params.workspace
-                )
+                workspace_name = st.query_params.workspace
+
+                # Check shared exports volume first (for cross-app integration)
+                shared_path = st.session_state.settings.get("shared_exports_path", "")
+                if shared_path:
+                    shared_workspace = Path(shared_path) / workspace_name
+                    if shared_workspace.exists() and (shared_workspace / "mzML-files").exists():
+                        st.session_state.workspace = shared_workspace
+                        st.session_state.workspace_source = "shared"
+                        # Load source info if present
+                        source_info_path = shared_workspace / "source_info.json"
+                        if source_info_path.exists():
+                            st.session_state.source_info = json.loads(source_info_path.read_text())
+                        # Mark for auto-redirect to viewer page
+                        st.session_state.auto_redirect_to_viewer = True
+                    else:
+                        st.session_state.workspace = Path(workspaces_dir, workspace_name)
+                        st.session_state.workspace_source = "local"
+                else:
+                    st.session_state.workspace = Path(workspaces_dir, workspace_name)
+                    st.session_state.workspace_source = "local"
             elif st.session_state.location == "online":
                 workspace_id = str(uuid.uuid1())
                 st.session_state.workspace = Path(workspaces_dir, workspace_id)
+                st.session_state.workspace_source = "local"
                 st.query_params.workspace = workspace_id
             else:
                 st.session_state.workspace = Path(workspaces_dir, "default")
+                st.session_state.workspace_source = "local"
                 st.query_params.workspace = "default"
 
         else:
@@ -286,6 +306,10 @@ def page_setup(page: str = "") -> dict[str, Any]:
         # Apply captcha by calling the captcha_control function
         captcha_control()
 
+    # Auto-redirect to viewer for shared workspaces (cross-app integration)
+    if st.session_state.pop("auto_redirect_to_viewer", False):
+        st.switch_page("content/viewer.py")
+
     return params
 
 
@@ -323,7 +347,8 @@ def render_sidebar(page: str = "") -> None:
             else:
                 workspaces_dir = ".."
             # Online: show current workspace name in info text and option to change to other existing workspace
-            if st.session_state.location == "local":
+            # Skip workspace switcher for shared workspaces (cross-app integration)
+            if st.session_state.location == "local" and st.session_state.get("workspace_source") != "shared":
                 with st.expander("🖥️ **Workspaces**"):
                     # Define callback function to change workspace
                     def change_workspace():

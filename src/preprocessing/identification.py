@@ -13,7 +13,7 @@ import json
 
 import numpy as np
 import polars as pl
-from pyopenms import IdXMLFile, AASequence
+from pyopenms import IdXMLFile, AASequence, PeptideIdentificationList
 
 
 # Default matching tolerances
@@ -190,8 +190,9 @@ def extract_idxml_to_parquet(
         status_callback("Loading idXML file...")
 
     protein_ids = []
-    peptide_ids = []
-    IdXMLFile().load(str(idxml_path), protein_ids, peptide_ids)
+    peptide_ids = PeptideIdentificationList()  # pyOpenMS 3.5+ requires this type
+    # Use absolute path to avoid issues with relative path resolution
+    IdXMLFile().load(str(Path(idxml_path).resolve()), protein_ids, peptide_ids)
 
     if status_callback:
         status_callback(f"Processing {len(peptide_ids)} peptide identifications...")

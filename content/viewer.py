@@ -22,6 +22,7 @@ from openms_insight.rendering.bridge import clear_component_cache
 
 from src.common.common import page_setup
 from src.preprocessing import get_cache_paths, raw_cache_is_valid, component_cache_is_valid, load_im_info
+from src.preprocessing.pipeline import preprocess_file
 from src.preprocessing.identification import (
     get_id_cache_paths,
     id_cache_is_valid,
@@ -42,8 +43,33 @@ params = page_setup()
 
 st.title("mzML Viewer")
 
+# Show return link if loaded from shared volume (cross-app integration)
+if st.session_state.get("workspace_source") == "shared":
+    source_info = st.session_state.get("source_info", {})
+    source_app = source_info.get("app_name", "Source App")
+    source_url = source_info.get("return_url")
+
+    if source_url:
+        st.markdown(f"[← Return to {source_app}]({source_url})")
+
 # Get workspace mzML directory
 mzML_dir = Path(st.session_state.workspace, "mzML-files")
+
+# Auto-process files if coming from shared workspace (cross-app integration)
+if st.session_state.get("workspace_source") == "shared":
+    unprocessed_files = []
+    for mzml_file in sorted(mzML_dir.glob("*.mzML")):
+        paths = get_cache_paths(st.session_state.workspace, mzml_file)
+        if not (raw_cache_is_valid(mzml_file, paths) and component_cache_is_valid(paths)):
+            unprocessed_files.append(mzml_file)
+
+    if unprocessed_files:
+        source_app = st.session_state.get("source_info", {}).get("app_name", "external app")
+        st.info(f"Processing {len(unprocessed_files)} file(s) from {source_app}...")
+        for mzml_file in unprocessed_files:
+            preprocess_file(mzml_file)
+        # Rerun to ensure clean component state after processing
+        st.rerun()
 
 # Find preprocessed files
 preprocessed_files = []
@@ -223,19 +249,19 @@ with col2:
 # =============================================================================
 
 if has_ids and id_components:
-    # Render SequenceView first (computes annotations)
-    sv_result = id_components["sequence_view"](
-        key=f"{file_key}_sequence_view",
-        state_manager=state_manager,
-        height=450
-    )
-
     # Annotated spectrum plot (linked to SequenceView)
     id_components["annotated_spectrum_plot"](
         key=f"{file_key}_spectrum_plot",
         state_manager=state_manager,
         height=400,
         sequence_view_key=f"{file_key}_sequence_view"
+    )
+
+    # Render SequenceView first (computes annotations)
+    sv_result = id_components["sequence_view"](
+        key=f"{file_key}_sequence_view",
+        state_manager=state_manager,
+        height=800
     )
 
     # Identification table

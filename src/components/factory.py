@@ -62,6 +62,8 @@ def create_ms_components(
             title="Ion Mobility",
             index_field="im_id",
             default_row=0,
+            server_side_pagination=True,
+            page_size=100,
         )
 
     # Spectra Table (basic, without ID counts)
@@ -97,6 +99,8 @@ def create_ms_components(
         index_field="scan_id",
         go_to_fields=["scan_id", "name"],
         default_row=0,
+        server_side_pagination=True,
+        page_size=100,
     )
 
     # Peaks Table
@@ -130,6 +134,8 @@ def create_ms_components(
         index_field="peak_id",
         initial_sort=[{"column": "intensity", "dir": "desc"}],
         default_row=-1,
+        server_side_pagination=True,
+        page_size=100,
     )
 
     # Spectrum Plot (basic, without annotations)
@@ -253,6 +259,8 @@ def create_id_components(
         index_field="scan_id",
         go_to_fields=["scan_id", "name"],
         default_row=0,
+        server_side_pagination=True,
+        page_size=100,
     )
 
     # Identifications Table
@@ -277,6 +285,8 @@ def create_id_components(
         ],
         index_field="id_idx",
         title="Identifications",
+        server_side_pagination=True,
+        page_size=100,
     )
 
     # Build annotation config from search params

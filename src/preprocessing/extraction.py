@@ -160,7 +160,8 @@ def extract_mzml_to_parquet(
         status_callback("Parsing mzML file...")
 
     exp = MSExperiment()
-    MzMLFile().load(str(mzml_path), exp)
+    # Use absolute path to avoid issues with relative path resolution
+    MzMLFile().load(str(Path(mzml_path).resolve()), exp)
 
     # Detect ion mobility type
     if status_callback:

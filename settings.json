@@ -3,6 +3,7 @@
     "github-user": "OpenMS",
     "version": "0.1.2",
     "repository-name": "toppview-lite",
+    "shared_exports_path": "shared-exports",
     "analytics": {
         "google-analytics": {
             "enabled": false,
