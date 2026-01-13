@@ -224,16 +224,13 @@ def page_setup(page: str = "") -> dict[str, Any]:
         if "windows" in sys.argv:
             os.chdir("../streamlit-template")
         # Define the directory where all workspaces will be stored
-        if (
-            st.session_state.settings["workspaces_dir"]
-            and st.session_state.location == "local"
-        ):
+        if st.session_state.settings.get("workspaces_dir"):
             workspaces_dir = Path(
                 st.session_state.settings["workspaces_dir"],
                 "workspaces-" + st.session_state.settings["repository-name"],
             )
         else:
-            workspaces_dir = ".."
+            workspaces_dir = Path("..")
 
         # Check if workspace logic is enabled
         if st.session_state.settings["enable_workspaces"]:
@@ -243,7 +240,8 @@ def page_setup(page: str = "") -> dict[str, Any]:
                 # Check shared exports volume first (for cross-app integration)
                 shared_path = st.session_state.settings.get("shared_exports_path", "")
                 if shared_path:
-                    shared_workspace = Path(shared_path) / workspace_name
+                    # Resolve to absolute path for consistent behavior in Docker
+                    shared_workspace = Path(shared_path).resolve() / workspace_name
                     if shared_workspace.exists() and (shared_workspace / "mzML-files").exists():
                         st.session_state.workspace = shared_workspace
                         st.session_state.workspace_source = "shared"
@@ -256,6 +254,9 @@ def page_setup(page: str = "") -> dict[str, Any]:
                     else:
                         st.session_state.workspace = Path(workspaces_dir, workspace_name)
                         st.session_state.workspace_source = "local"
+                        # Log warning in online mode when shared workspace expected but not found
+                        if st.session_state.location == "online":
+                            st.warning(f"Shared workspace not found at {shared_workspace}. Using local workspace.")
                 else:
                     st.session_state.workspace = Path(workspaces_dir, workspace_name)
                     st.session_state.workspace_source = "local"
