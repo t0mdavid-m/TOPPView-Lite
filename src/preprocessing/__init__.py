@@ -12,7 +12,7 @@ from .component_inputs import (
     create_spectra_table_with_ids,
     load_im_info,
 )
-from .pipeline import preprocess_file
+from .pipeline import preprocess_file, preprocess_file_headless
 
 __all__ = [
     "get_cache_paths",
@@ -24,4 +24,5 @@ __all__ = [
     "create_spectra_table_with_ids",
     "load_im_info",
     "preprocess_file",
+    "preprocess_file_headless",
 ]
