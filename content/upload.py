@@ -98,6 +98,43 @@ mzML_dir = Path(st.session_state.workspace, "mzML-files")
 #     fileupload.load_example_mzML_files()
 
 
+def handle_cli_auto_process():
+    """Handle automatic file processing for CLI startup."""
+    if not st.session_state.get("cli_auto_process"):
+        return
+
+    # Mark as handled so we don't re-process on page reload
+    st.session_state.cli_auto_process = False
+
+    # Get all files that need processing
+    mzml_files = [f for f in mzML_dir.iterdir() if f.suffix.lower() == ".mzml"]
+
+    # Check external files too
+    external_files = mzML_dir / "external_files.txt"
+    ext_file_paths = []
+    if external_files.exists():
+        with open(external_files, "r") as fh:
+            ext_file_paths = [Path(line.strip()) for line in fh if line.strip() and Path(line.strip()).exists()]
+
+    all_files = mzml_files + ext_file_paths
+    files_to_process = [f for f in all_files if get_file_status(f) != "Ready"]
+
+    if files_to_process:
+        st.info(f"CLI mode: Auto-processing {len(files_to_process)} file(s)...")
+        for f in files_to_process:
+            preprocess_file(f)
+
+    # Check if all files are now ready
+    all_ready = all(get_file_status(f) == "Ready" for f in all_files)
+    if all_ready and all_files:
+        st.session_state.cli_startup = None  # Clear CLI startup state
+        st.switch_page("content/viewer.py")
+
+
+# Handle CLI auto-processing if enabled
+handle_cli_auto_process()
+
+
 def get_file_status(mzml_path: Path) -> str:
     """Get preprocessing status for a file. (TOPPView-Lite addition)"""
     paths = get_cache_paths(st.session_state.workspace, mzml_path)
