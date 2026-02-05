@@ -17,5 +17,19 @@
     "online_deployment": false,
     "enable_workspaces": true,
     "test": true,
-    "workspaces_dir": ".."
+    "workspaces_dir": "..",
+    "queue_settings": {
+        "default_timeout": 7200,
+        "result_ttl": 86400
+    },
+    "demo_workspaces": {
+        "enabled": true,
+        "source_dirs": [
+            "example-data/workspaces"
+        ]
+    },
+    "max_threads": {
+        "local": 4,
+        "online": 2
+    }
 }

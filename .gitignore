@@ -16,3 +16,4 @@ gdpr_consent/node_modules/
 # Cache directories
 .cache/
 **/.cache/
+.streamlit/secrets.toml
