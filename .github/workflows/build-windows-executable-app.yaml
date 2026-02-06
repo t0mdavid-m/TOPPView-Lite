@@ -92,7 +92,7 @@ jobs:
     - name: Create .bat file
       run: |
         echo '@echo off' > ${{ env.APP_NAME }}.bat
-        echo 'setlocal EnableDelayedExpansion' > ${{ env.APP_NAME }}.bat
+        echo 'setlocal EnableDelayedExpansion' >> ${{ env.APP_NAME }}.bat
         echo '' >> ${{ env.APP_NAME }}.bat
         echo 'REM Set OpenMS data path for TOPP tools' >> ${{ env.APP_NAME }}.bat
         echo 'set OPENMS_DATA_PATH=%~dp0share\OpenMS' >> ${{ env.APP_NAME }}.bat
@@ -108,7 +108,8 @@ jobs:
         echo 'REM Create credentials.toml with empty email to disable email prompt' >> ${{ env.APP_NAME }}.bat
         echo 'copy /Y ".streamlit\credentials.toml" "%USERPROFILE%\.streamlit\credentials.toml" > nul' >> ${{ env.APP_NAME }}.bat
         echo '' >> ${{ env.APP_NAME }}.bat
-        echo 'start /min .\python-${{ env.PYTHON_VERSION }}\python -m streamlit run app.py local' >> ${{ env.APP_NAME }}.bat
+        echo 'REM Launch using CLI with any passed arguments (supports: toppview-lite file.mzML)' >> ${{ env.APP_NAME }}.bat
+        echo '.\python-${{ env.PYTHON_VERSION }}\python cli.py %*' >> ${{ env.APP_NAME }}.bat
 
     - name: Create All-in-one executable folder
       run: |
@@ -122,6 +123,7 @@ jobs:
         cp -r example-data streamlit_exe
         cp -r .streamlit streamlit_exe
         cp app.py streamlit_exe
+        cp cli.py streamlit_exe
         cp settings.json streamlit_exe
         cp default-parameters.json streamlit_exe
         cp ${{ env.APP_NAME }}.bat streamlit_exe
@@ -135,6 +137,14 @@ jobs:
         To launch the application:
         1. Navigate to the installation directory.
         2. Double-click on the file: ${{ env.APP_NAME }}.bat or ${{ env.APP_NAME }} shortcut.
+
+        Command Line Usage:
+        - Open a file directly: ${{ env.APP_NAME }}.bat path/to/file.mzML
+        - Check server status:  ${{ env.APP_NAME }}.bat --status
+        - Stop background server: ${{ env.APP_NAME }}.bat --stop
+
+        The application runs a background server for fast file loading.
+        After the first startup, opening new files is nearly instant.
 
         Additional Information:
         - If multiple Streamlit apps are running, you can change the port in the .streamlit/config.toml file.
@@ -207,6 +217,7 @@ jobs:
               <ComponentRef Id="CreateAppFolder" />
               <ComponentRef Id="DesktopShortcutComponent" />
               <ComponentRef Id="InstallDirShortcutComponent" />
+              <ComponentRef Id="FileAssociationComponent" />
             </Feature>
 
             <!-- Create shortcut for running app on desktop -->
@@ -219,6 +230,16 @@ jobs:
             <Component Id="InstallDirShortcutComponent" Guid="c2df9472-3b45-4558-a56d-6034cf7c8b72" Directory="AppSubFolder">
               <Shortcut Id="InstallDirShortcut" Name="${{ env.APP_NAME }}" Description="Launch ${{ env.APP_NAME }}" Target="[AppSubFolder]${{ env.APP_NAME }}.bat" WorkingDirectory="AppSubFolder" Icon="AppIcon" />
               <RegistryValue Root="HKCU" Key="Software\\OpenMS\\${{ env.APP_NAME }}" Name="InstallFolderShortcut" Type="integer" Value="1" KeyPath="yes" />
+            </Component>
+
+            <!-- File association for .mzML files -->
+            <Component Id="FileAssociationComponent" Guid="d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90" Directory="AppSubFolder">
+              <RegistryValue Root="HKCU" Key="Software\\OpenMS\\${{ env.APP_NAME }}" Name="FileAssociation" Type="integer" Value="1" KeyPath="yes" />
+              <ProgId Id="TOPPViewLite.mzML" Description="mzML Mass Spectrometry File" Icon="AppIcon">
+                <Extension Id="mzML" ContentType="application/x-mzml">
+                  <Verb Id="open" Command="Open with ${{ env.APP_NAME }}" TargetFile="[AppSubFolder]${{ env.APP_NAME }}.bat" Argument="&quot;%1&quot;" />
+                </Extension>
+              </ProgId>
             </Component>
 
             <!-- Provide icon here; it should exist in the SourceDir folder -->
