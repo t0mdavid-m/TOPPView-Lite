@@ -97,24 +97,6 @@ source /root/miniforge3/bin/activate streamlit-env\n\
 # Start cron for workspace cleanup\n\
 service cron start\n\
 \n\
-# Start Redis server in background\n\
-echo "Starting Redis server..."\n\
-redis-server --daemonize yes --dir /var/lib/redis --appendonly no\n\
-\n\
-# Wait for Redis to be ready\n\
-until redis-cli ping > /dev/null 2>&1; do\n\
-    echo "Waiting for Redis..."\n\
-    sleep 1\n\
-done\n\
-echo "Redis is ready"\n\
-\n\
-# Start RQ worker(s) in background\n\
-WORKER_COUNT=${RQ_WORKER_COUNT:-1}\n\
-echo "Starting $WORKER_COUNT RQ worker(s)..."\n\
-for i in $(seq 1 $WORKER_COUNT); do\n\
-    rq worker openms-workflows --url $REDIS_URL --name worker-$i &\n\
-done\n\
-\n\
 # Load balancer setup\n\
 SERVER_COUNT=${STREAMLIT_SERVER_COUNT:-1}\n\
 \n\
