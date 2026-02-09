@@ -12,5 +12,9 @@ services:
       - 8501:8501
     volumes:
       - workspaces-toppview-lite:/app/workspaces
+    environment:
+      # Number of Streamlit server instances (default: 1 = no load balancer).
+      # Set to >1 to enable nginx load balancing across multiple Streamlit instances.
+      - STREAMLIT_SERVER_COUNT=10
 volumes:
   workspaces-toppview-lite:
