@@ -10,6 +10,7 @@ port = 8501 # should be same as configured in deployment repo
 address = "0.0.0.0"
 enableCORS = false
 enableXsrfProtection = false
+fileWatcherType = "none"
 
 
 [theme]
