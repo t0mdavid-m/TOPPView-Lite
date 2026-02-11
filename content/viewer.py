@@ -42,6 +42,17 @@ params = page_setup()
 
 st.title("mzML Viewer")
 
+# =============================================================================
+# CLI File Loading Support
+# =============================================================================
+# Handle load_file query parameter from CLI (toppview-lite file.mzML)
+cli_load_file = st.query_params.get("load_file")
+if cli_load_file:
+    # Store the requested file for auto-selection
+    st.session_state["cli_requested_file"] = cli_load_file
+    # Clear the query param to avoid re-triggering on refresh
+    del st.query_params["load_file"]
+
 # Show return link if loaded from shared volume (cross-app integration)
 if st.session_state.get("workspace_source") == "shared":
     source_info = st.session_state.get("source_info", {})
@@ -70,6 +81,17 @@ if st.session_state.get("workspace_source") == "shared":
         # Rerun to ensure clean component state after processing
         st.rerun()
 
+# Auto-process CLI-requested file if not yet processed
+cli_requested = st.session_state.get("cli_requested_file")
+if cli_requested:
+    cli_file_path = mzML_dir / cli_requested
+    if cli_file_path.exists():
+        paths = get_cache_paths(st.session_state.workspace, cli_file_path)
+        if not (raw_cache_is_valid(cli_file_path, paths) and component_cache_is_valid(paths)):
+            st.info(f"Processing {cli_requested} (loaded via CLI)...")
+            preprocess_file(cli_file_path)
+            st.rerun()
+
 # Find preprocessed files
 preprocessed_files = []
 for mzml_file in sorted(mzML_dir.glob("*.mzML")):
@@ -89,9 +111,23 @@ if not preprocessed_files:
 # File Selection
 # =============================================================================
 
+# Determine default selection index (for CLI-loaded files)
+default_index = 0
+cli_requested = st.session_state.get("cli_requested_file")
+if cli_requested:
+    # Find the CLI-requested file in the list
+    for i, f in enumerate(preprocessed_files):
+        if f.name == cli_requested:
+            default_index = i
+            break
+    # Clear the CLI request after handling
+    if "cli_requested_file" in st.session_state:
+        del st.session_state["cli_requested_file"]
+
 selected_file = st.selectbox(
     "Select mzML file",
     preprocessed_files,
+    index=default_index,
     format_func=lambda p: p.name,
     key="viewer_selected_file",
 )
