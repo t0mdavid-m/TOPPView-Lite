@@ -30,6 +30,17 @@ A lightweight web-based viewer for mass spectrometry data.
    ```bash
    streamlit run app.py
    ```
+## CLI Usage
+
+After installing dependencies, you can use the command-line interface to open files directly:
+```bash
+toppview-lite start          # start background server
+toppview-lite your_file.mzML # open file directly
+toppview-lite status         # check server status
+toppview-lite stop           # stop server
+```
+
+The CLI maintains a background Streamlit server — after the initial startup, opening new files is nearly instant.
 
 ## Docker Deployment
 
