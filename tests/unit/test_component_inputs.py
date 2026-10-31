@@ -292,3 +292,47 @@ class TestCreateSpectraTableWithIds:
         )
 
         assert callback.call_count >= 1
+
+
+class TestSpectraTableStats:
+    """Spectra table statistics (TIC, BPI, base peak m/z, m/z range)."""
+
+    def test_statistics_per_spectrum(self, populated_cache):
+        from src.preprocessing.component_inputs import write_spectra_table
+
+        write_spectra_table(populated_cache)
+        df = pl.read_parquet(populated_cache["spectra_table"]).sort("scan_id")
+
+        scan1 = df.filter(pl.col("scan_id") == 1).row(0, named=True)
+        assert scan1["tic"] == 4500.0
+        assert scan1["bpi"] == 2000.0
+        assert scan1["base_peak_mz"] == 200.0
+        assert (scan1["mz_min"], scan1["mz_max"]) == (100.0, 300.0)
+
+    def test_old_table_gets_statistics_and_ids_table_is_dropped(
+        self, populated_cache, sample_metadata_df
+    ):
+        from src.preprocessing.component_inputs import ensure_spectra_table_stats
+
+        sample_metadata_df.write_parquet(populated_cache["spectra_table"])
+        sample_metadata_df.write_parquet(populated_cache["spectra_table_with_ids"])
+
+        assert ensure_spectra_table_stats(populated_cache) is True
+        assert "tic" in pl.read_parquet(populated_cache["spectra_table"]).columns
+        assert not populated_cache["spectra_table_with_ids"].exists()
+        # Second call is a no-op
+        assert ensure_spectra_table_stats(populated_cache) is False
+
+    def test_ids_table_has_first_sequence_and_score(
+        self, populated_cache, sample_id_df, sample_im_info_none
+    ):
+        from src.preprocessing.component_inputs import write_spectra_table
+
+        write_spectra_table(populated_cache)
+        create_spectra_table_with_ids(populated_cache, sample_id_df, sample_im_info_none)
+        df = pl.read_parquet(populated_cache["spectra_table_with_ids"])
+
+        scan2 = df.filter(pl.col("scan_id") == 2).row(0, named=True)
+        assert (scan2["sequence"], scan2["score"]) == ("PEPTIDE", "0.95")
+        assert df.filter(pl.col("scan_id") == 1)["sequence"].to_list() == [""]
+        assert df.filter(pl.col("scan_id") == 1)["score"].to_list() == [""]

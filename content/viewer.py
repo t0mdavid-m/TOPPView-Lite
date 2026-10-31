@@ -21,7 +21,15 @@ from openms_insight import StateManager
 from openms_insight.rendering.bridge import clear_component_cache
 
 from src.common.common import page_setup
-from src.preprocessing import get_cache_paths, raw_cache_is_valid, component_cache_is_valid, load_im_info, preprocess_file
+from src.preprocessing import (
+    get_cache_paths,
+    raw_cache_is_valid,
+    component_cache_is_valid,
+    ensure_spectra_table_stats,
+    load_im_info,
+    preprocess_file,
+)
+from src.components.navigation import NAVIGATION_ACTIONS, navigate
 from src.preprocessing.identification import (
     get_id_cache_paths,
     id_cache_is_valid,
@@ -118,6 +126,9 @@ has_im = im_info.get("type") != "none"
 num_im_dimensions = im_info.get("num_dimensions", 0)
 file_id = selected_file.stem
 cache_path = str(paths["component_cache"])
+
+# Caches built before the spectra table had TIC/BPI/m/z range get them now
+ensure_spectra_table_stats(paths, im_info)
 
 # Check for identification data
 idxml_path = find_matching_idxml(selected_file, st.session_state.workspace)
@@ -222,8 +233,8 @@ if ms_components["im_table"] is not None:
 # Heatmap (full width)
 ms_components["heatmap"](key=f"{file_key}_heatmap", state_manager=state_manager, height=400)
 
-# Tables side by side: Spectra | Peaks
-col1, col2 = st.columns([1, 1])
+# Tables side by side: Spectra (wider, it has more columns) | Peaks
+col1, col2 = st.columns([3, 2])
 
 with col1:
     # Use spectra_table_with_ids if IDs are present, else basic spectra_table
@@ -246,6 +257,43 @@ with col2:
 # =============================================================================
 # Spectrum Plot & Identifications
 # =============================================================================
+
+# Spectrum navigation (first/last, previous/next, previous/next MS1 or MS2)
+spectrum_index = pl.read_parquet(
+    paths["spectra_table"], columns=["scan_id", "ms_level", "retention_time"]
+)
+scan_ids = spectrum_index["scan_id"].to_list()
+ms_levels = spectrum_index["ms_level"].to_list()
+
+
+def _go_to(action: str) -> None:
+    target = navigate(scan_ids, ms_levels, state_manager.get_selection("spectrum"), action)
+    if target is None:
+        st.toast("No further spectrum in that direction.")
+        return
+    state_manager.set_selection("spectrum", target)
+    # Peak and identification belong to the previous spectrum
+    state_manager.clear_selection("peak")
+    state_manager.clear_selection("identification")
+
+
+nav_cols = st.columns([1] * len(NAVIGATION_ACTIONS) + [4], vertical_alignment="center")
+for col, (action, label, help_text) in zip(nav_cols, NAVIGATION_ACTIONS):
+    col.button(
+        label,
+        key=f"viewer_nav_{action}",
+        help=help_text,
+        on_click=_go_to,
+        args=(action,),
+        width="stretch",
+    )
+current_scan = state_manager.get_selection("spectrum")
+current_row = spectrum_index.filter(pl.col("scan_id") == current_scan)
+if current_row.height:
+    nav_cols[-1].caption(
+        f"Scan {current_scan} · MS{current_row['ms_level'][0]} · "
+        f"RT {current_row['retention_time'][0]:.2f} min"
+    )
 
 if has_ids and id_components:
     # Annotated spectrum plot (linked to SequenceView)

@@ -85,16 +85,7 @@ def create_component_inputs(
     if status_callback:
         status_callback("Creating spectra table input...")
 
-    spectra_cols = [
-        "scan_id", "name", "retention_time", "ms_level",
-        "precursor_mz", "charge", "num_peaks"
-    ]
-    if has_im:
-        spectra_cols.append("im_id")
-
-    pl.scan_parquet(paths["metadata"]).select(spectra_cols).collect().write_parquet(
-        paths["spectra_table"]
-    )
+    write_spectra_table(paths, im_info)
 
     # Peaks table: columns for display + filter column (scan_id) + interactivity (peak_id)
     if status_callback:
@@ -142,6 +133,65 @@ def create_component_inputs(
         status_callback("Component inputs created")
 
 
+# Per-spectrum statistics shown in the spectra table (pyopenms-viewer parity)
+SPECTRUM_STAT_COLUMNS = ["tic", "bpi", "base_peak_mz", "mz_min", "mz_max"]
+
+
+def write_spectra_table(paths: dict, im_info: Optional[dict] = None) -> None:
+    """Write the spectra table input: metadata plus per-spectrum statistics.
+
+    Statistics come from the peaks: ``tic`` (summed intensity), ``bpi`` (base
+    peak intensity), ``base_peak_mz`` and the m/z range ``mz_min``/``mz_max``.
+    Spectra without peaks get 0.
+    """
+    if im_info is None:
+        im_info = load_im_info(paths)
+    spectra_cols = [
+        "scan_id", "name", "retention_time", "ms_level",
+        "precursor_mz", "charge", "num_peaks"
+    ]
+    if im_info.get("type") != "none":
+        spectra_cols.append("im_id")
+
+    stats = (
+        pl.scan_parquet(paths["peaks"])
+        .group_by("scan_id")
+        .agg(
+            pl.col("intensity").sum().cast(pl.Float64).alias("tic"),
+            pl.col("intensity").max().cast(pl.Float64).alias("bpi"),
+            pl.col("mass").sort_by("intensity").last().cast(pl.Float64).alias("base_peak_mz"),
+            pl.col("mass").min().cast(pl.Float64).alias("mz_min"),
+            pl.col("mass").max().cast(pl.Float64).alias("mz_max"),
+        )
+    )
+    spectra = (
+        pl.scan_parquet(paths["metadata"])
+        .select(spectra_cols)
+        .join(stats, on="scan_id", how="left")
+        .with_columns([pl.col(c).fill_null(0.0) for c in SPECTRUM_STAT_COLUMNS])
+        .sort("scan_id")
+        .collect()
+    )
+    paths["spectra_table"].parent.mkdir(parents=True, exist_ok=True)
+    spectra.write_parquet(paths["spectra_table"])
+
+
+def ensure_spectra_table_stats(paths: dict, im_info: Optional[dict] = None) -> bool:
+    """Add the statistics columns to spectra tables built before they existed.
+
+    Returns True when the table was rewritten; the table with ID counts is
+    then removed so the caller rebuilds it from the new table.
+    """
+    target = paths["spectra_table"]
+    if target.exists():
+        columns = pl.read_parquet_schema(target)
+        if all(c in columns for c in SPECTRUM_STAT_COLUMNS):
+            return False
+    write_spectra_table(paths, im_info)
+    paths["spectra_table_with_ids"].unlink(missing_ok=True)
+    return True
+
+
 def create_spectra_table_with_ids(
     paths: dict,
     id_df: pl.DataFrame,
@@ -151,7 +201,8 @@ def create_spectra_table_with_ids(
     """Create spectra table with identification counts column.
 
     This creates a variant of spectra_table that includes a 'num_ids' column
-    showing how many identifications are linked to each spectrum.
+    showing how many identifications are linked to each spectrum, plus the
+    'sequence' and 'score' of its first identification.
 
     Args:
         paths: Dictionary of cache paths from get_cache_paths()
@@ -172,11 +223,34 @@ def create_spectra_table_with_ids(
     )
 
     # Read base spectra table and join with id counts
+    # First identification of each spectrum (sequence and score of its best hit)
+    sequence_col = "sequence_display" if "sequence_display" in id_df.columns else "sequence"
+    hit_columns = [pl.col(sequence_col).alias("sequence")]
+    if "score" in id_df.columns:
+        hit_columns.append(pl.col("score"))
+    top_hits = (
+        id_df.filter(pl.col("scan_id") > 0)
+        .sort("id_idx" if "id_idx" in id_df.columns else "scan_id")
+        .group_by("scan_id", maintain_order=True)
+        .first()
+        .select(pl.col("scan_id"), *hit_columns)
+    )
+
     spectra_df = pl.read_parquet(paths["spectra_table"])
     spectra_df = spectra_df.join(id_counts, on="scan_id", how="left")
+    spectra_df = spectra_df.join(top_hits, on="scan_id", how="left")
     spectra_df = spectra_df.with_columns(
-        pl.col("num_ids").fill_null(0).cast(pl.Int32)
+        pl.col("num_ids").fill_null(0).cast(pl.Int32),
+        pl.col("sequence").fill_null(""),
     )
+    if "score" in spectra_df.columns:
+        # As text: the browser shows a missing number as "NaN", and most
+        # spectra have no identification
+        spectra_df = spectra_df.with_columns(
+            pl.col("score")
+            .map_elements(lambda v: f"{v:.4g}", return_dtype=pl.Utf8)
+            .fill_null("")
+        )
 
     # Write to spectra_table_with_ids.parquet
     spectra_df.write_parquet(paths["spectra_table_with_ids"])

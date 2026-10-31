@@ -12,6 +12,71 @@ import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView
 
 
+# Cache ids carry a version: the spectra tables gained statistics columns, and a
+# table reconstructed from an older cache would not have them.
+SPECTRA_TABLE_CACHE_ID = "spectra_table_v2"
+SPECTRA_TABLE_WITH_IDS_CACHE_ID = "spectra_table_with_ids_v2"
+
+# Optional columns, off until the viewer turns them on in the column menu
+SPECTRA_HIDDEN_COLUMNS = ["name", "base_peak_mz", "mz_min", "mz_max"]
+
+
+def _number(field: str, title: str, precision: int, **extra) -> dict:
+    return {
+        "field": field,
+        "title": title,
+        "sorter": "number",
+        "formatter": "money",
+        "formatterParams": {"precision": precision, "symbol": ""},
+        **extra,
+    }
+
+
+def spectra_column_definitions(with_ids: bool = False) -> list:
+    """Spectra table columns: scan metadata, intensity statistics, IDs.
+
+    Matches pyopenms-viewer's spectra table: TIC, base peak intensity (BPI),
+    base peak m/z and m/z range per spectrum, plus sequence and score of the
+    first identification when an idXML is linked.
+    """
+    columns = [
+        {"field": "scan_id", "title": "Scan ID", "sorter": "number", "width": 80},
+        {"field": "name", "title": "Name"},
+        _number("retention_time", "RT (min)", 2),
+        {"field": "ms_level", "title": "MS", "sorter": "number", "width": 50},
+        _number("precursor_mz", "Precursor m/z", 4),
+        {"field": "charge", "title": "z", "sorter": "number", "width": 50},
+        {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
+        {
+            "field": "tic",
+            "title": "TIC",
+            "sorter": "number",
+            "formatter": "scientific",
+            "formatterParams": {"precision": 3},
+        },
+        {
+            "field": "bpi",
+            "title": "BPI",
+            "sorter": "number",
+            "formatter": "scientific",
+            "formatterParams": {"precision": 3},
+            "headerTooltip": "Base peak intensity",
+        },
+        _number("base_peak_mz", "Base peak m/z", 4),
+        _number("mz_min", "m/z min", 2),
+        _number("mz_max", "m/z max", 2),
+    ]
+    if with_ids:
+        columns += [
+            {"field": "num_ids", "title": "# IDs", "sorter": "number", "width": 60},
+            {"field": "sequence", "title": "Sequence", "headerTooltip": True},
+            # No number formatter: spectra without an ID have no score and
+            # would show "NaN"
+            {"field": "score", "title": "Score", "sorter": "number"},
+        ]
+    return columns
+
+
 def create_ms_components(
     paths: dict,
     im_info: dict,
@@ -69,32 +134,13 @@ def create_ms_components(
     # Spectra Table (basic, without ID counts)
     spectra_filters = {"im_dimension": "im_id"} if use_im_filter else None
     spectra_table = Table(
-        cache_id=f"{prefix}spectra_table",
+        cache_id=f"{prefix}{SPECTRA_TABLE_CACHE_ID}",
         data_path=str(paths["spectra_table"]),
         cache_path=cache_path,
         filters=spectra_filters,
         interactivity={"spectrum": "scan_id"},
-        column_definitions=[
-            {"field": "scan_id", "title": "Scan ID", "sorter": "number", "width": 80},
-            {"field": "name", "title": "Name"},
-            {
-                "field": "retention_time",
-                "title": "RT (min)",
-                "sorter": "number",
-                "formatter": "money",
-                "formatterParams": {"precision": 2, "symbol": ""},
-            },
-            {"field": "ms_level", "title": "MS", "sorter": "number", "width": 50},
-            {
-                "field": "precursor_mz",
-                "title": "Precursor m/z",
-                "sorter": "number",
-                "formatter": "money",
-                "formatterParams": {"precision": 2, "symbol": ""},
-            },
-            {"field": "charge", "title": "z", "sorter": "number", "width": 50},
-            {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
-        ],
+        column_definitions=spectra_column_definitions(),
+        hidden_columns=SPECTRA_HIDDEN_COLUMNS,
         title="Spectra",
         index_field="scan_id",
         go_to_fields=["scan_id", "name"],
@@ -225,39 +271,19 @@ def create_id_components(
     # Load identification data for SequenceView
     id_df = pl.read_parquet(id_paths["identifications"])
 
-    # Spectra Table with ID counts
+    # Spectra Table with ID counts and the first identification
     spectra_filters = {"im_dimension": "im_id"} if use_im_filter else None
     spectra_table_with_ids = Table(
-        cache_id=f"{prefix}spectra_table_with_ids",
+        cache_id=f"{prefix}{SPECTRA_TABLE_WITH_IDS_CACHE_ID}",
         data_path=str(paths["spectra_table_with_ids"]),
         cache_path=cache_path,
         filters=spectra_filters,
         interactivity={"spectrum": "scan_id"},
-        column_definitions=[
-            {"field": "scan_id", "title": "Scan ID", "sorter": "number", "width": 80},
-            {"field": "name", "title": "Name"},
-            {
-                "field": "retention_time",
-                "title": "RT (min)",
-                "sorter": "number",
-                "formatter": "money",
-                "formatterParams": {"precision": 2, "symbol": ""},
-            },
-            {"field": "ms_level", "title": "MS", "sorter": "number", "width": 50},
-            {
-                "field": "precursor_mz",
-                "title": "Precursor m/z",
-                "sorter": "number",
-                "formatter": "money",
-                "formatterParams": {"precision": 2, "symbol": ""},
-            },
-            {"field": "charge", "title": "z", "sorter": "number", "width": 50},
-            {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
-            {"field": "num_ids", "title": "# IDs", "sorter": "number", "width": 60},
-        ],
+        column_definitions=spectra_column_definitions(with_ids=True),
+        hidden_columns=SPECTRA_HIDDEN_COLUMNS,
         title="Spectra",
         index_field="scan_id",
-        go_to_fields=["scan_id", "name"],
+        go_to_fields=["scan_id", "name", "sequence"],
         default_row=0,
         server_side_pagination=True,
         page_size=100,
@@ -379,7 +405,12 @@ def reconstruct_ms_components(
         except Exception:
             pass  # IM table may not exist
 
-    spectra_table = Table(cache_id=f"{prefix}spectra_table", cache_path=cache_path)
+    spectra_table = Table(
+        cache_id=f"{prefix}{SPECTRA_TABLE_CACHE_ID}",
+        cache_path=cache_path,
+        # A display option, not part of the cache: pass it on reconstruction too
+        hidden_columns=SPECTRA_HIDDEN_COLUMNS,
+    )
     peaks_table = Table(cache_id=f"{prefix}peaks_table", cache_path=cache_path)
     spectrum_plot = LinePlot(cache_id=f"{prefix}spectrum_plot", cache_path=cache_path)
     heatmap = Heatmap(cache_id=f"{prefix}peaks_heatmap", cache_path=cache_path)
@@ -409,8 +440,9 @@ def reconstruct_id_components(
     prefix = f"{file_id}_" if file_id else ""
 
     spectra_table_with_ids = Table(
-        cache_id=f"{prefix}spectra_table_with_ids",
-        cache_path=cache_path
+        cache_id=f"{prefix}{SPECTRA_TABLE_WITH_IDS_CACHE_ID}",
+        cache_path=cache_path,
+        hidden_columns=SPECTRA_HIDDEN_COLUMNS,
     )
     id_table = Table(cache_id=f"{prefix}id_table", cache_path=cache_path)
     sequence_view = SequenceView(

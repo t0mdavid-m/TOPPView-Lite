@@ -10,6 +10,7 @@ from .component_inputs import (
     component_cache_is_valid,
     create_component_inputs,
     create_spectra_table_with_ids,
+    ensure_spectra_table_stats,
     load_im_info,
 )
 from .pipeline import preprocess_file
@@ -22,6 +23,7 @@ __all__ = [
     "component_cache_is_valid",
     "create_component_inputs",
     "create_spectra_table_with_ids",
+    "ensure_spectra_table_stats",
     "load_im_info",
     "preprocess_file",
 ]
