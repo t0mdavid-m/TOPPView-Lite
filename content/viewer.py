@@ -29,8 +29,15 @@ from src.preprocessing.identification import (
     load_search_params,
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
+from src.preprocessing.features import (
+    extract_featurexml_to_parquet,
+    feature_cache_is_valid,
+    find_matching_featurexml,
+    get_feature_cache_paths,
+)
 from src.components.factory import (
     create_ms_components,
+    create_feature_table,
     create_id_components,
     reconstruct_ms_components,
     reconstruct_id_components,
@@ -268,3 +275,39 @@ if has_ids and id_components:
 else:
     # Basic spectrum plot (no annotations)
     ms_components["spectrum_plot"](key=f"{file_key}_spectrum_plot", state_manager=state_manager, height=400)
+
+# =============================================================================
+# Features (featureXML with the same name as the mzML)
+# =============================================================================
+
+featurexml_path = find_matching_featurexml(selected_file, st.session_state.workspace)
+if featurexml_path is not None:
+    feature_paths = get_feature_cache_paths(st.session_state.workspace, featurexml_path)
+    if not feature_cache_is_valid(featurexml_path, feature_paths):
+        with st.spinner(f"Reading {featurexml_path.name}..."):
+            extract_featurexml_to_parquet(featurexml_path, feature_paths, paths["metadata"])
+    feature_table = create_feature_table(
+        str(feature_paths["features"]), cache_path, file_id
+    )
+    st.caption(
+        f"Features from {featurexml_path.name}. Click a feature to show the MS1 "
+        "spectrum at its apex."
+    )
+    feature_table(key=f"{file_key}_feature_table", state_manager=state_manager, height=350)
+
+    # A newly clicked feature shows the MS1 spectrum at its apex
+    selected_feature = state_manager.get_selection("feature")
+    applied_key = f"viewer_applied_feature_{file_key}"
+    if selected_feature is not None and st.session_state.get(applied_key) != selected_feature:
+        st.session_state[applied_key] = selected_feature
+        apex = (
+            pl.scan_parquet(feature_paths["features"])
+            .filter(pl.col("feature_id") == selected_feature)
+            .select("apex_scan_id")
+            .collect()
+        )
+        if apex.height and apex["apex_scan_id"][0] > 0:
+            state_manager.set_selection("spectrum", int(apex["apex_scan_id"][0]))
+            state_manager.clear_selection("peak")
+            state_manager.clear_selection("identification")
+            st.rerun()
