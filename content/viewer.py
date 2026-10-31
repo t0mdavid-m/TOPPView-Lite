@@ -14,6 +14,7 @@ Layout:
 
 from pathlib import Path
 
+import numpy as np
 import streamlit as st
 import polars as pl
 import pyarrow.parquet as pq
@@ -29,6 +30,7 @@ from src.preprocessing.identification import (
     load_search_params,
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
+from src.export import export_filtered_mzml, filtered_output_path
 from src.components.factory import (
     create_ms_components,
     create_id_components,
@@ -268,3 +270,73 @@ if has_ids and id_components:
 else:
     # Basic spectrum plot (no annotations)
     ms_components["spectrum_plot"](key=f"{file_key}_spectrum_plot", state_manager=state_manager, height=400)
+
+# =============================================================================
+# Export filtered mzML
+# =============================================================================
+
+
+@st.fragment
+def export_section():
+    """Write a copy of the mzML restricted to an RT range, m/z range and MS levels."""
+    with st.expander("Export filtered mzML"):
+        meta = pl.read_parquet(paths["metadata"], columns=["retention_time", "ms_level"])
+        mz_bounds = (
+            pl.scan_parquet(paths["peaks"])
+            .select(pl.col("mass").min().alias("lo"), pl.col("mass").max().alias("hi"))
+            .collect()
+            .row(0)
+        )
+        rt_lo = float(np.floor(meta["retention_time"].min() * 100) / 100)
+        rt_hi = float(np.ceil(meta["retention_time"].max() * 100) / 100)
+        mz_lo = float(np.floor(mz_bounds[0] or 0.0))
+        mz_hi = float(np.ceil(mz_bounds[1] or 0.0))
+        levels = sorted(int(v) for v in meta["ms_level"].unique().to_list())
+
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c1:
+            rt_range = st.slider(
+                "RT range (min)", rt_lo, max(rt_hi, rt_lo + 0.01), (rt_lo, max(rt_hi, rt_lo + 0.01)),
+                step=0.01, key=f"export_rt_{file_key}",
+            )
+        with c2:
+            mz_range = st.slider(
+                "m/z range", mz_lo, max(mz_hi, mz_lo + 1.0), (mz_lo, max(mz_hi, mz_lo + 1.0)),
+                step=1.0, key=f"export_mz_{file_key}",
+            )
+        with c3:
+            ms_levels = st.multiselect(
+                "MS levels", levels, default=levels, key=f"export_levels_{file_key}"
+            )
+
+        out_path = filtered_output_path(st.session_state.workspace, selected_file)
+        result_key = f"export_result_{file_key}"
+        if st.button("Create filtered mzML", disabled=not ms_levels):
+            with st.spinner("Filtering..."):
+                try:
+                    backend = export_filtered_mzml(
+                        selected_file,
+                        out_path,
+                        # Widgets show minutes; mzML stores seconds. Widen by a hair so
+                        # spectra on the rounded bounds are kept.
+                        (rt_range[0] * 60 - 0.01, rt_range[1] * 60 + 0.01),
+                        mz_range,
+                        ms_levels,
+                    )
+                    st.session_state[result_key] = {"ok": True, "backend": backend}
+                except (ValueError, RuntimeError) as err:
+                    st.session_state[result_key] = {"ok": False, "error": str(err)}
+
+        result = st.session_state.get(result_key)
+        if result and not result["ok"]:
+            st.error(result["error"])
+        elif result and out_path.exists():
+            size_mb = out_path.stat().st_size / 1e6
+            st.caption(f"{out_path.name}: {size_mb:.1f} MB, written with {result['backend']}.")
+            with open(out_path, "rb") as fh:
+                st.download_button(
+                    "Download filtered mzML", fh, file_name=out_path.name, mime="application/xml"
+                )
+
+
+export_section()
