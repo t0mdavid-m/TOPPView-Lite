@@ -292,3 +292,41 @@ class TestCreateSpectraTableWithIds:
         )
 
         assert callback.call_count >= 1
+
+
+class TestChromatogramInput:
+    """Tests for the MS1 TIC/BPC input."""
+
+    def test_tic_and_bpc_per_ms1_spectrum(self, populated_cache):
+        from src.preprocessing.component_inputs import create_chromatogram_input
+
+        create_chromatogram_input(populated_cache)
+        df = pl.read_parquet(populated_cache["chromatogram"])
+
+        # Only MS1 spectra (scans 1 and 3), sorted by retention time
+        assert df["scan_id"].to_list() == [1, 3]
+        assert df["tic"].to_list() == [4500.0, 1800.0]
+        assert df["bpc"].to_list() == [2000.0, 1200.0]
+        assert "im_id" not in df.columns
+
+    def test_ms1_without_peaks_gets_zero(self, populated_cache, sample_peaks_df):
+        from src.preprocessing.component_inputs import create_chromatogram_input
+
+        sample_peaks_df.filter(pl.col("scan_id") != 3).write_parquet(
+            populated_cache["peaks"]
+        )
+        create_chromatogram_input(populated_cache)
+        df = pl.read_parquet(populated_cache["chromatogram"])
+
+        assert df.filter(pl.col("scan_id") == 3)["tic"].to_list() == [0.0]
+
+    def test_ensure_builds_missing_input_for_old_caches(self, populated_cache):
+        from src.preprocessing.component_inputs import ensure_chromatogram_input
+
+        assert not populated_cache["chromatogram"].exists()
+        ensure_chromatogram_input(populated_cache)
+        assert populated_cache["chromatogram"].exists()
+
+    def test_create_component_inputs_writes_chromatogram(self, populated_cache):
+        create_component_inputs(populated_cache)
+        assert populated_cache["chromatogram"].exists()
