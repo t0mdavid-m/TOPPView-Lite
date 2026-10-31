@@ -11,23 +11,9 @@ import pytest
 import polars as pl
 
 # Add project root to path for imports
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-# Create mock for pyopenms to avoid dependency on actual OpenMS installation
-mock_pyopenms = MagicMock()
-mock_pyopenms.__version__ = "3.0.0"
-
-# Mock AASequence
-mock_aa_sequence = MagicMock()
-mock_aa_sequence.fromString = MagicMock(return_value=MagicMock(
-    getMonoWeight=MagicMock(return_value=1234.56),
-    size=MagicMock(return_value=0),
-))
-mock_pyopenms.AASequence = mock_aa_sequence
-mock_pyopenms.IdXMLFile = MagicMock
-
-sys.modules['pyopenms'] = mock_pyopenms
 
 
 @pytest.fixture
