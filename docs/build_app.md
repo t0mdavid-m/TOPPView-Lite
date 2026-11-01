@@ -88,6 +88,7 @@ Presets allow users to quickly apply optimized parameter configurations. They ar
 2. Only presets matching the current workflow name are displayed
 3. Clicking a preset updates `params.json` and refreshes the UI
 4. If no `presets.json` exists or no presets match the workflow, no buttons are shown
+5. `StreamlitUI.user_presets()` (also in `parameter_section()`) lets users save the current settings as their own preset, in `<workflow_dir>/user-presets.json`. A user preset is a full snapshot: input file selections (keys with an `input-files/<key>` directory) and `max_threads` are left out, and applying it resets the other TOPP parameters to their defaults first. The same file records the preset applied last, which drives the "settings changed since you applied …" line
 
 ## Code structure
 - The main file `app.py` defines page layout.
@@ -133,3 +134,5 @@ Take a look at the example pages `Simple Workflow` or `Workflow with mzML files`
 ### Complex workflow using TOPP tools
 
 This template app features a module in `src/workflow` that allows for complex and long workflows to be built very efficiently. Check out the `TOPP Workflow Framework` page for more information (on the *sidebar*).
+
+For building **conditional parameter UI** (widgets that appear or disappear based on another parameter's value), see the *Reactive parameters* subsection of the `TOPP Workflow Framework` page's *Parameter Input* section.

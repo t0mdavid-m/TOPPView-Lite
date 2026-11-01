@@ -1,30 +1,38 @@
-# This Dockerfile creates a container with pyOpenMS
+# This Dockerfile builds OpenMS, the TOPP tools, pyOpenMS and thidparty tools.
 # It also adds a basic streamlit server that serves a pyOpenMS-based app.
 # hints:
-# build image with: docker build --no-cache -t toppview-lite:latest --build-arg GITHUB_TOKEN=<your-github-token> . 2>&1 | tee build.log
+# build image and give it a name (here: streamlitapp) with: docker build --no-cache -t streamlitapp:latest --build-arg GITHUB_TOKEN=<your-github-token> . 2>&1 | tee build.log
 # check if image was build: docker image ls
-# run container: docker run -p 8501:8501 toppview-lite:latest
+# run container: docker run -p 8501:8501 streamlitappsimple:latest
 # debug container after build (comment out ENTRYPOINT) and run container with interactive /bin/bash shell
 # prune unused images/etc. to free disc space (e.g. might be needed on gitpod). Use with care.: docker system prune --all --force
 
-FROM ubuntu:22.04
+FROM ubuntu:22.04 AS setup-build-system
+ARG OPENMS_REPO=https://github.com/OpenMS/OpenMS.git
+ARG OPENMS_BRANCH=release/3.5.0
 ARG PORT=8501
-# GitHub token to download latest OpenMS executable for Windows from Github action artifact.
-ARG GITHUB_TOKEN
-ENV GH_TOKEN=${GITHUB_TOKEN}
-# Streamlit app Gihub user name (to download artifact from).
+# Streamlit app GitHub user name (to download artifact from).
 ARG GITHUB_USER=t0mdavid-m
-# Streamlit app Gihub repository name (to download artifact from).
+# Streamlit app GitHub repository name (to download artifact from).
 ARG GITHUB_REPO=TOPPView-Lite
 
-
-# Step 1: set up a sane build system
 USER root
 
+# Keep apt from stopping at interactive prompts: tzdata, pulled in by
+# later packages, otherwise waits for a timezone and the build hangs.
+ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+
+# Install required Ubuntu packages.
 RUN apt-get -y update
-# note: streamlit in docker needs libgtk2.0-dev (see https://yugdamor.medium.com/importerror-libgthread-2-0-so-0-cannot-open-shared-object-file-no-such-file-or-directory-895b94a7827b)
-RUN apt-get install -y --no-install-recommends --no-install-suggests wget ca-certificates libgtk2.0-dev curl jq nginx cron
+RUN apt-get install -y --no-install-recommends --no-install-suggests g++ autoconf automake patch libtool make git gpg wget ca-certificates curl jq libgtk2.0-dev openjdk-8-jdk cron
 RUN update-ca-certificates
+RUN apt-get install -y --no-install-recommends --no-install-suggests libsvm-dev libeigen3-dev coinor-libcbc-dev libglpk-dev libzip-dev zlib1g-dev libxerces-c-dev libbz2-dev libomp-dev libhdf5-dev
+RUN apt-get install -y --no-install-recommends --no-install-suggests libboost-date-time1.74-dev \
+                                                                     libboost-iostreams1.74-dev \
+                                                                     libboost-regex1.74-dev \
+                                                                     libboost-math1.74-dev \
+                                                                     libboost-random1.74-dev
+RUN apt-get install -y --no-install-recommends --no-install-suggests qt6-base-dev libqt6svg6-dev libqt6opengl6-dev libqt6openglwidgets6 libgl-dev
 
 # Install Github CLI
 RUN (type -p wget >/dev/null || (apt-get update && apt-get install wget -y)) \
@@ -43,22 +51,111 @@ RUN wget -q \
     && rm -f Miniforge3-Linux-x86_64.sh
 RUN mamba --version
 
+# Make /root traversable so the entrypoint can `source
+# /root/miniforge3/bin/activate ...` when the container runs as a non-root
+# user (apptainer/singularity maps the host UID into the container; the
+# default ubuntu /root is 0700 which would block path traversal). +x only,
+# not +r, so the directory listing remains private.
+RUN chmod o+x /root
+
 # Setup mamba environment.
-RUN mamba create -n streamlit-env python=3.10 
+RUN mamba create -n streamlit-env python=3.10
 RUN echo "mamba activate streamlit-env" >> ~/.bashrc
 SHELL ["/bin/bash", "--rcfile", "~/.bashrc"]
 SHELL ["mamba", "run", "-n", "streamlit-env", "/bin/bash", "-c"]
 
-#################################### install streamlit
-# install packages
-COPY requirements.txt requirements.txt
-RUN mamba install pip
-RUN python -m pip install --upgrade pip
-RUN python -m pip install -r requirements.txt
+# Install up-to-date cmake via mamba and packages for pyOpenMS build.
+RUN mamba install cmake
+RUN pip install --upgrade pip && python -m pip install -U setuptools nose "cython>=3.1.0,<3.3" "autowrap<=0.24" pandas numpy pytest
 
+# Clone OpenMS branch and the associcated contrib+thirdparties+pyOpenMS-doc submodules.
+RUN git clone --recursive --depth=1 -b ${OPENMS_BRANCH} --single-branch ${OPENMS_REPO} && cd /OpenMS
 
-# create workdir and copy over all streamlit related files/folders
-WORKDIR /app
+# Pull Linux compatible third-party dependencies and store them in directory thirdparty.
+WORKDIR /OpenMS
+RUN mkdir /thirdparty && \
+    git submodule update --init THIRDPARTY && \
+    cp -r THIRDPARTY/All/* /thirdparty && \
+    cp -r THIRDPARTY/Linux/x86_64/* /thirdparty && \
+    chmod -R +x /thirdparty
+ENV PATH="/thirdparty/LuciPHOr2:/thirdparty/MSGFPlus:/thirdparty/Sirius:/thirdparty/ThermoRawFileParser:/thirdparty/Comet:/thirdparty/Fido:/thirdparty/MaRaCluster:/thirdparty/MyriMatch:/thirdparty/OMSSA:/thirdparty/Percolator:/thirdparty/SpectraST:/thirdparty/XTandem:/thirdparty/crux:${PATH}"
+
+# Build OpenMS and pyOpenMS.
+FROM setup-build-system AS compile-openms
+WORKDIR /
+
+# Set up build directory.
+RUN mkdir /openms-build
+WORKDIR /openms-build
+
+# Configure.
+RUN /bin/bash -c "cmake -DCMAKE_BUILD_TYPE='Release' -DCMAKE_PREFIX_PATH='/OpenMS/contrib-build/;/usr/;/usr/local' -DHAS_XSERVER=OFF -DBOOST_USE_STATIC=OFF -DPYOPENMS=ON ../OpenMS -DPY_MEMLEAK_DISABLE=On"
+
+# Build TOPP tools and clean up.
+RUN make -j4 TOPP
+RUN rm -rf src doc CMakeFiles
+
+# Build pyOpenMS wheels and install via pip.
+RUN make -j4 pyopenms
+WORKDIR /openms-build/pyOpenMS
+RUN pip install dist/*.whl
+
+# Install other dependencies (excluding pyopenms)
+COPY requirements.txt ./requirements.txt 
+RUN grep -Ev '^pyopenms([=<>!~].*)?$' requirements.txt > requirements_cleaned.txt && mv requirements_cleaned.txt requirements.txt
+RUN pip install -r requirements.txt
+
+WORKDIR /
+RUN mkdir openms
+
+# Copy TOPP tools bin directory, add to PATH.
+RUN cp -r openms-build/bin /openms/bin
+ENV PATH="/openms/bin/:${PATH}"
+
+# Copy TOPP tools bin directory, add to PATH.
+RUN cp -r openms-build/lib /openms/lib
+ENV LD_LIBRARY_PATH="/openms/lib/:${LD_LIBRARY_PATH}"
+
+# Copy share folder, add to PATH, remove source directory.
+RUN cp -r OpenMS/share/OpenMS /openms/share
+RUN rm -rf OpenMS
+ENV OPENMS_DATA_PATH="/openms/share/"
+
+# Remove build directory.
+RUN rm -rf openms-build
+
+# Prepare and run streamlit app.
+FROM compile-openms AS run-app
+
+# Install Redis server for job queue and nginx for load balancing.
+# Redis data lives under $RUNTIME_DIR at runtime (see entrypoint.sh) so no
+# /var/lib/redis setup is needed - that path is not writable under Apptainer.
+RUN apt-get update && apt-get install -y --no-install-recommends redis-server nginx \
+    && rm -rf /var/lib/apt/lists/*
+
+# Mono runs the ThermoRawFileParser (THIRDPARTY/All, a .NET Framework build)
+# that FileConverter calls to convert Thermo RAW files to mzML on Linux.
+RUN apt-get update && apt-get install -y --no-install-recommends mono-complete \
+    && rm -rf /var/lib/apt/lists/* \
+    && mono --version
+
+# Create Redis data directory. Default 0755 root-owned is enough: the docker
+# entrypoint runs as root (can write regardless of mode), and the apptainer
+# entrypoint relocates Redis state to /tmp/openms-runtime-* so this dir is
+# never written under apptainer.
+RUN mkdir -p /var/lib/redis
+
+# Pre-create bind-mount targets so apptainer/singularity has a real attach
+# point. Docker auto-creates missing `-v` targets, but singularity uses a
+# read-only underlay and silently ignores `:rw` when the target isn't a
+# real directory in the SIF — writes then fail with EROFS even though the
+# host bind path is writable. Pre-creating these directories costs one
+# inode each and changes nothing in docker mode (the user's volume mount
+# shadows them).
+RUN mkdir -p /workspaces-streamlit-template /mounted-data
+
+# Create workdir and copy over all streamlit related files/folders.
+
 # note: specifying folder with slash as suffix and repeating the folder name seems important to preserve directory structure
 WORKDIR /app
 COPY assets/ /app/assets
@@ -89,50 +186,17 @@ ENV REDIS_URL=redis://localhost:6379/0
 # Set to >1 to enable nginx load balancer with multiple Streamlit instances
 ENV STREAMLIT_SERVER_COUNT=1
 
-# create entrypoint script to start cron, Redis, RQ workers, and Streamlit
-RUN echo -e '#!/bin/bash\n\
-set -e\n\
-source /root/miniforge3/bin/activate streamlit-env\n\
-\n\
-# Start cron for workspace cleanup\n\
-service cron start\n\
-\n\
-# Load balancer setup\n\
-SERVER_COUNT=${STREAMLIT_SERVER_COUNT:-1}\n\
-\n\
-if [ "$SERVER_COUNT" -gt 1 ]; then\n\
-    echo "Starting $SERVER_COUNT Streamlit instances with nginx load balancer..."\n\
-\n\
-    # Generate nginx upstream block\n\
-    UPSTREAM_SERVERS=""\n\
-    BASE_PORT=8510\n\
-    for i in $(seq 0 $((SERVER_COUNT - 1))); do\n\
-        PORT=$((BASE_PORT + i))\n\
-        UPSTREAM_SERVERS="${UPSTREAM_SERVERS}        server 127.0.0.1:${PORT};\\n"\n\
-    done\n\
-\n\
-    # Write nginx config\n\
-    mkdir -p /etc/nginx\n\
-    echo -e "worker_processes auto;\\npid /run/nginx.pid;\\n\\nevents {\\n    worker_connections 1024;\\n}\\n\\nhttp {\\n    client_max_body_size 0;\\n\\n    map \\$cookie_stroute \\$route_key {\\n        \\x22\\x22      \\$request_id;\\n        default \\$cookie_stroute;\\n    }\\n\\n    upstream streamlit_backend {\\n        hash \\$route_key consistent;\\n${UPSTREAM_SERVERS}    }\\n\\n    map \\$http_upgrade \\$connection_upgrade {\\n        default upgrade;\\n        \\x27\\x27 close;\\n    }\\n\\n    server {\\n        listen 0.0.0.0:8501;\\n\\n        location / {\\n            proxy_pass http://streamlit_backend;\\n            proxy_http_version 1.1;\\n            proxy_set_header Upgrade \\$http_upgrade;\\n            proxy_set_header Connection \\$connection_upgrade;\\n            proxy_set_header Host \\$host;\\n            proxy_set_header X-Real-IP \\$remote_addr;\\n            proxy_set_header X-Forwarded-For \\$proxy_add_x_forwarded_for;\\n            proxy_set_header X-Forwarded-Proto \\$scheme;\\n            proxy_read_timeout 86400;\\n            proxy_send_timeout 86400;\\n            proxy_buffering off;\\n            add_header Set-Cookie \\x22stroute=\\$route_key; Path=/; HttpOnly; SameSite=Lax\\x22 always;\\n        }\\n    }\\n}" > /etc/nginx/nginx.conf\n\
-\n\
-    # Start Streamlit instances on internal ports\n\
-    for i in $(seq 0 $((SERVER_COUNT - 1))); do\n\
-        PORT=$((BASE_PORT + i))\n\
-        echo "Starting Streamlit instance on port $PORT..."\n\
-        streamlit run app.py --server.port $PORT --server.address 0.0.0.0 &\n\
-    done\n\
-\n\
-    sleep 2\n\
-    echo "Starting nginx load balancer on port 8501..."\n\
-    exec /usr/sbin/nginx -g "daemon off;"\n\
-else\n\
-    # Single instance mode (default) - run Streamlit directly on port 8501\n\
-    echo "Starting Streamlit app..."\n\
-    exec streamlit run app.py --server.address 0.0.0.0\n\
-fi\n\
-' > /app/entrypoint.sh
-# make the script executable
+# Install the apptainer-compatible entrypoint that starts cron (when the root
+# FS is writable), Redis, RQ workers, optional nginx load balancer, and the
+# Streamlit server. The script falls back to /tmp paths under apptainer.
+COPY docker/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# Install the demo-seeding script run by the seed-demos initContainer
+# (k8s/base/streamlit-deployment.yaml). One copy of the logic, so what the
+# image ships is what tests/test_seed_demos.py executes.
+COPY docker/seed-demos.sh /app/docker/seed-demos.sh
+RUN chmod +x /app/docker/seed-demos.sh
 
 # Patch Analytics
 RUN mamba run -n streamlit-env python hooks/hook-analytics.py
@@ -140,16 +204,23 @@ RUN mamba run -n streamlit-env python hooks/hook-analytics.py
 # Set Online Deployment
 RUN jq '.online_deployment = true' settings.json > tmp.json && mv tmp.json settings.json
 
-# Download latest OpenMS App executable as a ZIP file
-RUN if [ -n "$GH_TOKEN" ]; then \
-        echo "GH_TOKEN is set, proceeding to download the release asset..."; \
-        gh release download -R ${GITHUB_USER}/${GITHUB_REPO} -p "TOPPView-Lite.zip" -D /app; \
+# Point the in-app mounted-drive browser at the conventional bind-mount path.
+# The browser only renders when this directory exists at runtime, i.e. when
+# the user starts the container with `-v /host/path:/mounted-data`.
+RUN jq '.local_data_dir = "/mounted-data"' settings.json > tmp.json && mv tmp.json settings.json
+
+# Download the Windows installer of the latest release, if it has one.
+# ARG declared here (not at the top) — otherwise the per-run token busts the cache.
+ARG GITHUB_TOKEN
+RUN if [ -n "$GITHUB_TOKEN" ]; then \
+        echo "GITHUB_TOKEN is set, proceeding to download the release asset..."; \
+        gh release download -R ${GITHUB_USER}/${GITHUB_REPO} -p "*-Setup.exe" -O /app/OpenMS-App-Setup.exe \
+            || echo "The latest release has no Windows installer, skipping."; \
     else \
-        echo "GH_TOKEN is not set, skipping the release asset download."; \
+        echo "GITHUB_TOKEN is not set, skipping the release asset download."; \
     fi
 
-# make sure that mamba environment is used
-SHELL ["mamba", "run", "-n", "streamlit-env", "/bin/bash", "-c"]
 
+# Run app as container entrypoint.
 EXPOSE $PORT
 ENTRYPOINT ["/app/entrypoint.sh"]

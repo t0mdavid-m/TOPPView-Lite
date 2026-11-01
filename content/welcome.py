@@ -13,10 +13,37 @@ from src.common.common import page_setup
 page_setup()
 
 
+# The styles below were written for the dark theme. In the light theme the
+# same rules get light surfaces and darker text, so the cards follow the app
+# theme (⋮ → Settings) instead of staying dark.
+_LIGHT_THEME_COLORS = {
+    "#262730 0%, #1e1e2e 100%": "#ffffff 0%, #f4f5fa 100%",
+    "#1e2a3a 0%, #1a2530 100%": "#eef4fb 0%, #e6eef8 100%",
+    "#1a2a3a 0%, #152030 100%": "#eef1fb 0%, #e5e9f8 100%",
+    "border: 2px solid #444": "border: 2px solid #d5d8e5",
+    "border: 1px solid #2a4a6a": "border: 1px solid #b9cde4",
+    "rgba(0,0,0,0.3)": "rgba(0,0,0,0.08)",
+    "color: #6b7fff": "color: #29379b",
+    "color: #a0a0a0": "color: #555a6e",
+    "color: #808080": "color: #5f6475",
+    "color: #64b5f6": "color: #1565c0",
+    "color: #90caf9": "color: #1e4f8a",
+}
+
+
+def themed_css(css: str) -> str:
+    """Return ``css`` with light-theme colors when the light theme is active."""
+    if getattr(st.context.theme, "type", "dark") != "light":
+        return css
+    for dark, light in _LIGHT_THEME_COLORS.items():
+        css = css.replace(dark, light)
+    return css
+
+
 def inject_custom_css():
     """Inject custom CSS for the welcome page styling."""
     st.markdown(
-        """
+        themed_css("""
         <style>
         /* Hero section styling */
         .hero-section {
@@ -131,7 +158,7 @@ def inject_custom_css():
             margin-top: 1rem;
         }
         </style>
-        """,
+        """),
         unsafe_allow_html=True,
     )
 
@@ -144,14 +171,14 @@ def create_navigation_button(emoji, title, subtitle, page_path):
         label=f"{emoji} {title}",
         key=button_key,
         help=subtitle,
-        use_container_width=True,
+        width="stretch",
         type="primary"
     ):
         st.switch_page(page_path)
 
     # Apply custom styling
     st.markdown(
-        f"""
+        themed_css(f"""
         <style>
         .st-key-{button_key} button {{
             background: linear-gradient(135deg, #262730 0%, #1e1e2e 100%) !important;
@@ -184,7 +211,7 @@ def create_navigation_button(emoji, title, subtitle, page_path):
             color: white !important;
         }}
         </style>
-        """,
+        """),
         unsafe_allow_html=True,
     )
 
@@ -236,8 +263,8 @@ def render_navigation_buttons():
 
 def render_windows_download():
     """Render the Windows download section if the installer is available."""
-    zip_path = Path("TOPPView-Lite.zip")
-    if not zip_path.exists():
+    installer_path = Path("OpenMS-App-Setup.exe")
+    if not installer_path.exists():
         return False
 
     st.markdown("---")
@@ -260,20 +287,20 @@ def render_windows_download():
         # Create columns for centered button
         btn_spacer1, btn_col, btn_spacer2 = st.columns([1, 2, 1])
         with btn_col:
-            with open(zip_path, "rb") as file:
+            with open(installer_path, "rb") as file:
                 st.download_button(
                     label="Download for Windows",
                     data=file,
-                    file_name="TOPPView-Lite.zip",
-                    mime="application/zip",
+                    file_name="TOPPView-Lite-Setup.exe",
+                    mime="application/vnd.microsoft.portable-executable",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
         st.markdown(
             """
             <div class="download-box-hint">
-                Extract the zip file and run the installer (.msi) to install.
+                Run the installer to install the app for your user; no admin rights are needed.
             </div>
             """,
             unsafe_allow_html=True,
