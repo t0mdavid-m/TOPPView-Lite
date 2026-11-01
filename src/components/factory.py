@@ -11,6 +11,12 @@ from typing import Dict, Optional, Any
 import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView, SeriesPlot
 
+# openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
+# SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
+# AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
+if not hasattr(SequenceView, "_get_render_key"):
+    SequenceView._get_render_key = lambda self: None
+
 
 def create_ms_components(
     paths: dict,
