@@ -148,10 +148,75 @@ def chromatogram(ctx: ViewerContext) -> None:
     plots[kind](key=f"{ctx.file_key}_{kind}_plot", state_manager=ctx.state_manager, height=250)
 
 
-def peak_map(ctx: ViewerContext) -> None:
-    ctx.ms_components["heatmap"](
-        key=f"{ctx.file_key}_heatmap", state_manager=ctx.state_manager, height=400
+def _feature_paths(ctx: ViewerContext, consume: bool = False) -> tuple[dict, bool]:
+    """Parquet cache of the matching featureXML, (re)built when stale. Returns
+    the paths and whether the cache was rebuilt; ``consume`` (the features
+    table) also reports a rebuild made earlier by the peak map, once."""
+    feature_paths = get_feature_cache_paths(ctx.workspace, ctx.featurexml_path)
+    rebuilt = not feature_cache_is_valid(ctx.featurexml_path, feature_paths)
+    stale_key = f"viewer_feature_table_stale_{ctx.file_key}"
+    if rebuilt:
+        with st.spinner(f"Reading {ctx.featurexml_path.name}..."):
+            extract_featurexml_to_parquet(
+                ctx.featurexml_path, feature_paths, ctx.paths["metadata"]
+            )
+        # The features table rebuilds its cache too, also when the peak map
+        # came first and found the parquet stale
+        st.session_state[stale_key] = True
+    return feature_paths, st.session_state.pop(stale_key, False) if consume else rebuilt
+
+
+def _show_selected_feature(ctx: ViewerContext, feature_paths: dict) -> None:
+    """A newly selected feature (in the table or on the peak map) shows the MS1
+    spectrum at its apex."""
+    state_manager = ctx.state_manager
+    selected_feature = state_manager.get_selection("feature")
+    applied_key = f"viewer_applied_feature_{ctx.file_key}"
+    if selected_feature is None or st.session_state.get(applied_key) == selected_feature:
+        return
+    st.session_state[applied_key] = selected_feature
+    apex = (
+        pl.scan_parquet(feature_paths["features"])
+        .filter(pl.col("feature_id") == selected_feature)
+        .select("apex_scan_id")
+        .collect()
     )
+    if apex.height and apex["apex_scan_id"][0] > 0:
+        state_manager.set_selection("spectrum", int(apex["apex_scan_id"][0]))
+        state_manager.clear_selection("peak")
+        state_manager.clear_selection("identification")
+        st.rerun()
+
+
+def peak_map(ctx: ViewerContext) -> None:
+    """MS1 peak map. With a matching featureXML, its features are drawn as boxes
+    (RT and m/z extent of their mass traces); clicking inside one selects it."""
+    heatmap = ctx.ms_components["heatmap"]
+    # Heatmap.set_boxes() arrived after openms-insight 0.4.0
+    can_draw = hasattr(heatmap, "set_boxes")
+    boxes = None
+    if can_draw and ctx.featurexml_path is not None and st.toggle(
+        "Show features", value=True, key="viewer_peak_map_features"
+    ):
+        feature_paths, _ = _feature_paths(ctx)
+        # Most intense first: they are the ones kept when a view has too many
+        boxes = (
+            pl.scan_parquet(feature_paths["features"])
+            .select("feature_id", "intensity", "rt_start", "rt_end", "mz_start", "mz_end")
+            .sort("intensity", descending=True)
+            .collect()
+        )
+        _show_selected_feature(ctx, feature_paths)
+    if can_draw:
+        heatmap.set_boxes(
+            boxes,
+            x_range=("rt_start", "rt_end"),
+            y_range=("mz_start", "mz_end"),
+            id_column="feature_id",
+            selection="feature",
+            label="Features",
+        )
+    heatmap(key=f"{ctx.file_key}_heatmap", state_manager=ctx.state_manager, height=400)
 
 
 def spectra_table(ctx: ViewerContext) -> None:
@@ -257,11 +322,7 @@ def features(ctx: ViewerContext) -> None:
     spectrum at the feature's apex."""
     featurexml_path = ctx.featurexml_path
     state_manager = ctx.state_manager
-    feature_paths = get_feature_cache_paths(ctx.workspace, featurexml_path)
-    rebuilt = not feature_cache_is_valid(featurexml_path, feature_paths)
-    if rebuilt:
-        with st.spinner(f"Reading {featurexml_path.name}..."):
-            extract_featurexml_to_parquet(featurexml_path, feature_paths, ctx.paths["metadata"])
+    feature_paths, rebuilt = _feature_paths(ctx, consume=True)
     table = create_feature_table(
         str(feature_paths["features"]), ctx.cache_path, ctx.file_id, regenerate_cache=rebuilt
     )
@@ -270,23 +331,7 @@ def features(ctx: ViewerContext) -> None:
         "spectrum at its apex."
     )
     table(key=f"{ctx.file_key}_feature_table", state_manager=state_manager, height=350)
-
-    # A newly clicked feature shows the MS1 spectrum at its apex
-    selected_feature = state_manager.get_selection("feature")
-    applied_key = f"viewer_applied_feature_{ctx.file_key}"
-    if selected_feature is not None and st.session_state.get(applied_key) != selected_feature:
-        st.session_state[applied_key] = selected_feature
-        apex = (
-            pl.scan_parquet(feature_paths["features"])
-            .filter(pl.col("feature_id") == selected_feature)
-            .select("apex_scan_id")
-            .collect()
-        )
-        if apex.height and apex["apex_scan_id"][0] > 0:
-            state_manager.set_selection("spectrum", int(apex["apex_scan_id"][0]))
-            state_manager.clear_selection("peak")
-            state_manager.clear_selection("identification")
-            st.rerun()
+    _show_selected_feature(ctx, feature_paths)
 
 
 def tools(ctx: ViewerContext) -> None:
