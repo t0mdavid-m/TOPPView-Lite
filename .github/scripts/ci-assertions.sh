@@ -53,7 +53,7 @@
 #                      which is already on every kind node so nothing pulls)
 #   CI_ASSERT_TIMEOUT  seconds to wait for a pod      (default: 180)
 #   CI_ASSERT_STORAGE_NS    namespace of the NFS server
-#                           (default: template-app-storage)
+#                           (default: toppview-lite-storage)
 #   CI_ASSERT_STORAGE_ROOT  kustomize root serving it    (default: k8s/storage)
 
 CI_ASSERT_NS="${CI_ASSERT_NS:-openms}"
@@ -65,7 +65,7 @@ CI_ASSERT_CI_OVERLAY="${CI_ASSERT_CI_OVERLAY:-k8s/overlays/ci}"
 CI_ASSERT_MOUNT="${CI_ASSERT_MOUNT:-/workspaces-streamlit-template}"
 CI_ASSERT_TIMEOUT="${CI_ASSERT_TIMEOUT:-180}"
 CI_ASSERT_BASE="${CI_ASSERT_BASE:-k8s/base}"
-CI_ASSERT_STORAGE_NS="${CI_ASSERT_STORAGE_NS:-template-app-storage}"
+CI_ASSERT_STORAGE_NS="${CI_ASSERT_STORAGE_NS:-toppview-lite-storage}"
 CI_ASSERT_STORAGE_ROOT="${CI_ASSERT_STORAGE_ROOT:-k8s/storage}"
 # Seconds to wait for the NFS server to come back, and for a client operation to
 # get through afterwards. NFSv4.1's grace period is ~90s by default, during
