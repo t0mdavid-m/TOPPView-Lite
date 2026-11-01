@@ -65,7 +65,7 @@ spec:
   #                read on every open(), and Logger closes per message while the
   #                UI reopens per second. Lowering it buys GETATTR traffic and
   #                no correctness.
-  storageClassName: template-app-nfs
+  storageClassName: toppview-lite-nfs
   resources:
     requests:
       # MUST stay materially below the backing volume in

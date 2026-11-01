@@ -28,7 +28,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: nfs-server-data
-  namespace: template-app-storage
+  namespace: toppview-lite-storage
   labels:
     app.kubernetes.io/part-of: openms-streamlit
     app.kubernetes.io/component: nfs-server

@@ -974,28 +974,28 @@ jobs:
           # retry loop exists to report.
           if [ "$applied" -ne 1 ]; then
             echo "::error::could not apply k8s/storage/ after 5 attempts"
-            kubectl get all -n template-app-storage || true
+            kubectl get all -n toppview-lite-storage || true
             exit 1
           fi
           # `kubectl wait --all` reports success against zero objects, so the
           # server has to be found before it is waited on. `|| true` because an
           # empty result must reach the explicit check below rather than kill
           # the step through `bash -e`.
-          WORKLOADS=$(kubectl get deploy,statefulset -n template-app-storage -o name 2>/dev/null || true)
+          WORKLOADS=$(kubectl get deploy,statefulset -n toppview-lite-storage -o name 2>/dev/null || true)
           if [ -z "$WORKLOADS" ]; then
-            echo "::error::k8s/storage/ created no Deployment or StatefulSet in template-app-storage"
-            kubectl get all -n template-app-storage
+            echo "::error::k8s/storage/ created no Deployment or StatefulSet in toppview-lite-storage"
+            kubectl get all -n toppview-lite-storage
             exit 1
           fi
           for w in $WORKLOADS; do
-            kubectl rollout status -n template-app-storage "$w" --timeout=300s
+            kubectl rollout status -n toppview-lite-storage "$w" --timeout=300s
           done
-          kubectl get pods,pvc -n template-app-storage -o wide
+          kubectl get pods,pvc -n toppview-lite-storage -o wide
           kubectl get storageclass
           # Diagnostic, never a gate: this is the filesystem nfs-provisioner
           # measures when it decides whether a workspace claim fits.
-          kubectl exec -n template-app-storage \
-            "$(kubectl get pod -n template-app-storage -l app=nfs-server -o name | head -n1)" \
+          kubectl exec -n toppview-lite-storage \
+            "$(kubectl get pod -n toppview-lite-storage -l app=nfs-server -o name | head -n1)" \
             -- df -h /export || true
 
       - name: Deploy with Kustomize
@@ -1286,10 +1286,10 @@ jobs:
           echo "=== pods (all namespaces) ==="
           kubectl get pods -A -o wide || true
           echo "=== storage tier ==="
-          kubectl get all,pvc -n template-app-storage -o wide || true
-          kubectl describe pods -n template-app-storage || true
-          for p in $(kubectl get pods -n template-app-storage -o name 2>/dev/null); do
-            kubectl logs -n template-app-storage "$p" --all-containers --prefix --tail=200 || true
+          kubectl get all,pvc -n toppview-lite-storage -o wide || true
+          kubectl describe pods -n toppview-lite-storage || true
+          for p in $(kubectl get pods -n toppview-lite-storage -o name 2>/dev/null); do
+            kubectl logs -n toppview-lite-storage "$p" --all-containers --prefix --tail=200 || true
           done
           echo "=== storage classes and volumes ==="
           kubectl get storageclass || true
@@ -1391,7 +1391,7 @@ jobs:
           for n in $NODES; do
             docker exec "$n" sh -c 'umount -f -l -a -t nfs,nfs4' || true
           done
-          kubectl delete ns template-app-storage --wait=false || true
+          kubectl delete ns toppview-lite-storage --wait=false || true
 
           echo "=== residual NFS mounts (expected: none) ==="
           residual=""
@@ -1690,28 +1690,28 @@ jobs:
           # retry loop exists to report.
           if [ "$applied" -ne 1 ]; then
             echo "::error::could not apply k8s/storage/ after 5 attempts"
-            kubectl get all -n template-app-storage || true
+            kubectl get all -n toppview-lite-storage || true
             exit 1
           fi
           # `kubectl wait --all` reports success against zero objects, so the
           # server has to be found before it is waited on. `|| true` because an
           # empty result must reach the explicit check below rather than kill
           # the step through `bash -e`.
-          WORKLOADS=$(kubectl get deploy,statefulset -n template-app-storage -o name 2>/dev/null || true)
+          WORKLOADS=$(kubectl get deploy,statefulset -n toppview-lite-storage -o name 2>/dev/null || true)
           if [ -z "$WORKLOADS" ]; then
-            echo "::error::k8s/storage/ created no Deployment or StatefulSet in template-app-storage"
-            kubectl get all -n template-app-storage
+            echo "::error::k8s/storage/ created no Deployment or StatefulSet in toppview-lite-storage"
+            kubectl get all -n toppview-lite-storage
             exit 1
           fi
           for w in $WORKLOADS; do
-            kubectl rollout status -n template-app-storage "$w" --timeout=300s
+            kubectl rollout status -n toppview-lite-storage "$w" --timeout=300s
           done
-          kubectl get pods,pvc -n template-app-storage -o wide
+          kubectl get pods,pvc -n toppview-lite-storage -o wide
           kubectl get storageclass
           # Diagnostic, never a gate: this is the filesystem nfs-provisioner
           # measures when it decides whether a workspace claim fits.
-          kubectl exec -n template-app-storage \
-            "$(kubectl get pod -n template-app-storage -l app=nfs-server -o name | head -n1)" \
+          kubectl exec -n toppview-lite-storage \
+            "$(kubectl get pod -n toppview-lite-storage -l app=nfs-server -o name | head -n1)" \
             -- df -h /export || true
 
       - name: Deploy with Kustomize (full manifests, no filter)
@@ -2014,10 +2014,10 @@ jobs:
           echo "=== pods (all namespaces) ==="
           kubectl get pods -A -o wide || true
           echo "=== storage tier ==="
-          kubectl get all,pvc -n template-app-storage -o wide || true
-          kubectl describe pods -n template-app-storage || true
-          for p in $(kubectl get pods -n template-app-storage -o name 2>/dev/null); do
-            kubectl logs -n template-app-storage "$p" --all-containers --prefix --tail=200 || true
+          kubectl get all,pvc -n toppview-lite-storage -o wide || true
+          kubectl describe pods -n toppview-lite-storage || true
+          for p in $(kubectl get pods -n toppview-lite-storage -o name 2>/dev/null); do
+            kubectl logs -n toppview-lite-storage "$p" --all-containers --prefix --tail=200 || true
           done
           echo "=== storage classes and volumes ==="
           kubectl get storageclass || true
@@ -2101,7 +2101,7 @@ jobs:
           for n in $NODES; do
             docker exec "$n" sh -c 'umount -f -l -a -t nfs,nfs4' || true
           done
-          kubectl delete ns template-app-storage --wait=false || true
+          kubectl delete ns toppview-lite-storage --wait=false || true
 
           echo "=== residual NFS mounts (expected: none) ==="
           residual=""

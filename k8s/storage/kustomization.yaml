@@ -49,7 +49,7 @@ kind: Kustomization
 # Applies to every object below, the Helm-inflated ones included. The Namespace
 # object itself is cluster scoped; its name already matches, so the transformer
 # is a no-op there rather than a rename.
-namespace: template-app-storage
+namespace: toppview-lite-storage
 
 resources:
   - namespace.yaml
@@ -82,5 +82,5 @@ helmCharts:
     # `.Release.Namespace` into its RBAC subjects, and a chart that resolved it
     # to `default` would be repaired by the transformer only where kustomize
     # knows to look.
-    namespace: template-app-storage
+    namespace: toppview-lite-storage
     valuesFile: ganesha-values.yaml
