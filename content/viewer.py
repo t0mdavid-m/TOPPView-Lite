@@ -3,19 +3,12 @@
 This page displays preprocessed mzML files using openms_insight
 with cross-component selection linking.
 
-Layout:
-- Ion Mobility table (if FAIMS data present)
-- TIC / BPC chromatogram (click selects the MS1 spectrum)
-- Heatmap (peak map)
-- Spectra table (with # IDs column if identifications present) | Peaks table (side by side)
-- Spectrum plot (annotated, or mirrored against the theoretical b/y ions, if identification selected)
-- Identifications table (if identifications present)
-- SequenceView (if identification selected)
+The components (src/components/viewer_panels.py) are arranged on the Layout
+page; without a saved layout the viewer uses DEFAULT_LAYOUT there.
 """
 
 from pathlib import Path
 
-import numpy as np
 import streamlit as st
 import polars as pl
 import pyarrow.parquet as pq
@@ -27,7 +20,6 @@ from src.preprocessing import (
     get_cache_paths,
     raw_cache_is_valid,
     component_cache_is_valid,
-    ensure_chromatogram_input,
     load_im_info,
     preprocess_file,
 )
@@ -38,25 +30,21 @@ from src.preprocessing.identification import (
     load_search_params,
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
-from src.preprocessing.features import (
-    extract_featurexml_to_parquet,
-    feature_cache_is_valid,
-    find_matching_featurexml,
-    get_feature_cache_paths,
-)
-from src.components.tool_panel import console_panel, operation_panel
-from src.export import export_filtered_mzml, filtered_output_path
+from src.preprocessing.features import find_matching_featurexml
 from src.components.factory import (
     create_ms_components,
-    create_feature_table,
-    create_chromatogram_components,
     create_id_components,
     reconstruct_ms_components,
     reconstruct_id_components,
-    create_mirror_plot,
-    MIRROR_BOTTOM_IDENTIFIER,
 )
-from src.preprocessing.mirror import ensure_mirror_input
+from src.components.viewer_panels import (
+    DEFAULT_LAYOUT,
+    ViewerContext,
+    available_catalog,
+    layout_path,
+    renderers,
+)
+from src.layout_manager import render_layout, resolve_layout
 
 
 # Page setup
@@ -237,253 +225,24 @@ with st.sidebar:
     st.json(state_manager.get_state_for_vue())
 
 # =============================================================================
-# Main Layout
+# Components, in the arrangement saved on the Layout page
 # =============================================================================
 
-# Create shared state manager
-state_manager = StateManager(session_key="viewer_state")
-file_key = selected_file.stem
-
-# Tools: run an operation (or, locally, Python) on this file. Results show up
-# on this page right away: a featureXML named like the mzML fills the features
-# table below, and a new mzML is opened.
-with st.expander("Tools", icon="🧰"):
-    tool_tabs = st.tabs(
-        ["Operations"] + (["Python console"] if st.session_state.location == "local" else [])
-    )
-    with tool_tabs[0]:
-        written = operation_panel(st.session_state.workspace, selected_file, key="viewer_tools")
-    if len(tool_tabs) > 1:
-        with tool_tabs[1]:
-            written += console_panel(
-                st.session_state.workspace, selected_file, key="viewer_console",
-                scan_id=state_manager.get_selection("spectrum"),
-            )
-    new_mzml = [p for p in written if p.suffix == ".mzML" and p.name != selected_file.name]
-    if new_mzml:
-        st.session_state["viewer_pending_file"] = new_mzml[-1].name
-        st.rerun()
-
-# Ion Mobility table (if present)
-if ms_components["im_table"] is not None:
-    ms_components["im_table"](key=f"{file_key}_im_table", state_manager=state_manager, height=400)
-
-# TIC / BPC (full width). Clicking a point selects that MS1 spectrum.
-ensure_chromatogram_input(paths, im_info)
-chromatograms = create_chromatogram_components(paths, im_info, file_id)
-chromatogram_kind = st.segmented_control(
-    "Chromatogram",
-    options=["tic", "bpc"],
-    format_func={"tic": "TIC", "bpc": "BPC"}.get,
-    default="tic",
-    key="viewer_chromatogram_kind",
-    label_visibility="collapsed",
-) or "tic"
-chromatograms[chromatogram_kind](
-    key=f"{file_key}_{chromatogram_kind}_plot", state_manager=state_manager, height=250
+ctx = ViewerContext(
+    workspace=Path(st.session_state.workspace),
+    selected_file=selected_file,
+    paths=paths,
+    im_info=im_info,
+    file_id=file_id,
+    cache_path=cache_path,
+    state_manager=StateManager(session_key="viewer_state"),
+    ms_components=ms_components,
+    id_components=id_components if has_ids else None,
+    id_paths=cached["id_paths"],
+    search_params=search_params,
+    featurexml_path=find_matching_featurexml(selected_file, st.session_state.workspace),
+    local=st.session_state.location == "local",
 )
-
-# Heatmap (full width)
-ms_components["heatmap"](key=f"{file_key}_heatmap", state_manager=state_manager, height=400)
-
-# Tables side by side: Spectra | Peaks
-col1, col2 = st.columns([1, 1])
-
-with col1:
-    # Use spectra_table_with_ids if IDs are present, else basic spectra_table
-    if has_ids and id_components:
-        id_components["spectra_table_with_ids"](
-            key=f"{file_key}_spectra_table",
-            state_manager=state_manager,
-            height=400
-        )
-    else:
-        ms_components["spectra_table"](
-            key=f"{file_key}_spectra_table",
-            state_manager=state_manager,
-            height=400
-        )
-
-with col2:
-    ms_components["peaks_table"](key=f"{file_key}_peaks_table", state_manager=state_manager, height=400)
-
-# =============================================================================
-# Spectrum Plot & Identifications
-# =============================================================================
-
-if has_ids and id_components:
-    spectrum_mode = st.segmented_control(
-        "Spectrum view",
-        ["Annotated", "Mirror vs. theoretical"],
-        default="Annotated",
-        key="viewer_spectrum_mode",
-        label_visibility="collapsed",
-    )
-
-    if spectrum_mode == "Mirror vs. theoretical":
-        mirror_key = f"viewer_mirror_{file_key}"
-        mirror_paths, rebuilt = ensure_mirror_input(paths, cached["id_paths"], search_params)
-        if rebuilt or mirror_key not in st.session_state:
-            with st.spinner("Generating theoretical spectra..."):
-                st.session_state[mirror_key] = create_mirror_plot(
-                    mirror_paths["mirror"], cache_path, file_id, regenerate_cache=rebuilt
-                )
-
-        # The bottom half follows the selected identification.
-        selected_id = state_manager.get_selection("identification")
-        if state_manager.get_selection(MIRROR_BOTTOM_IDENTIFIER) != selected_id:
-            if selected_id is None:
-                state_manager.clear_selection(MIRROR_BOTTOM_IDENTIFIER)
-            else:
-                state_manager.set_selection(MIRROR_BOTTOM_IDENTIFIER, selected_id)
-
-        if selected_id is None:
-            st.caption("Select an identification below to compare its spectrum with the theoretical b/y ions.")
-        else:
-            match = (
-                pl.scan_parquet(mirror_paths["summary"])
-                .filter(pl.col("id_idx") == selected_id)
-                .collect()
-            )
-            if match.height:
-                row = match.row(0, named=True)
-                st.caption(
-                    f"{row['matched_ions']} of {row['total_ions']} theoretical b/y ions matched "
-                    f"({row['coverage']:.0f} %). Matched peaks are red and labelled."
-                )
-            else:
-                st.caption("This identification is not linked to a spectrum.")
-
-        st.session_state[mirror_key](
-            key=f"{file_key}_mirror_plot",
-            state_manager=state_manager,
-            height=450,
-        )
-    else:
-        # Annotated spectrum plot (linked to SequenceView)
-        id_components["annotated_spectrum_plot"](
-            key=f"{file_key}_spectrum_plot",
-            state_manager=state_manager,
-            height=400,
-            sequence_view_key=f"{file_key}_sequence_view"
-        )
-
-    # Render SequenceView first (computes annotations)
-    sv_result = id_components["sequence_view"](
-        key=f"{file_key}_sequence_view",
-        state_manager=state_manager,
-        height=800
-    )
-
-    # Identification table
-    id_components["id_table"](key=f"{file_key}_id_table", state_manager=state_manager, height=300)
-else:
-    # Basic spectrum plot (no annotations)
-    ms_components["spectrum_plot"](key=f"{file_key}_spectrum_plot", state_manager=state_manager, height=400)
-
-# =============================================================================
-# Features (featureXML with the same name as the mzML)
-# ======================================================================
-# =============================================================================
-
-featurexml_path = find_matching_featurexml(selected_file, st.session_state.workspace)
-if featurexml_path is not None:
-    feature_paths = get_feature_cache_paths(st.session_state.workspace, featurexml_path)
-    features_rebuilt = not feature_cache_is_valid(featurexml_path, feature_paths)
-    if features_rebuilt:
-        with st.spinner(f"Reading {featurexml_path.name}..."):
-            extract_featurexml_to_parquet(featurexml_path, feature_paths, paths["metadata"])
-    feature_table = create_feature_table(
-        str(feature_paths["features"]), cache_path, file_id, regenerate_cache=features_rebuilt
-    )
-    st.caption(
-        f"Features from {featurexml_path.name}. Click a feature to show the MS1 "
-        "spectrum at its apex."
-    )
-    feature_table(key=f"{file_key}_feature_table", state_manager=state_manager, height=350)
-
-    # A newly clicked feature shows the MS1 spectrum at its apex
-    selected_feature = state_manager.get_selection("feature")
-    applied_key = f"viewer_applied_feature_{file_key}"
-    if selected_feature is not None and st.session_state.get(applied_key) != selected_feature:
-        st.session_state[applied_key] = selected_feature
-        apex = (
-            pl.scan_parquet(feature_paths["features"])
-            .filter(pl.col("feature_id") == selected_feature)
-            .select("apex_scan_id")
-            .collect()
-        )
-        if apex.height and apex["apex_scan_id"][0] > 0:
-            state_manager.set_selection("spectrum", int(apex["apex_scan_id"][0]))
-            state_manager.clear_selection("peak")
-            state_manager.clear_selection("identification")
-            st.rerun()
-=======
-# Export filtered mzML
-# =============================================================================
-
-
-@st.fragment
-def export_section():
-    """Write a copy of the mzML restricted to an RT range, m/z range and MS levels."""
-    with st.expander("Export filtered mzML"):
-        meta = pl.read_parquet(paths["metadata"], columns=["retention_time", "ms_level"])
-        mz_bounds = (
-            pl.scan_parquet(paths["peaks"])
-            .select(pl.col("mass").min().alias("lo"), pl.col("mass").max().alias("hi"))
-            .collect()
-            .row(0)
-        )
-        rt_lo = float(np.floor(meta["retention_time"].min() * 100) / 100)
-        rt_hi = float(np.ceil(meta["retention_time"].max() * 100) / 100)
-        mz_lo = float(np.floor(mz_bounds[0] or 0.0))
-        mz_hi = float(np.ceil(mz_bounds[1] or 0.0))
-        levels = sorted(int(v) for v in meta["ms_level"].unique().to_list())
-
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            rt_range = st.slider(
-                "RT range (min)", rt_lo, max(rt_hi, rt_lo + 0.01), (rt_lo, max(rt_hi, rt_lo + 0.01)),
-                step=0.01, key=f"export_rt_{file_key}",
-            )
-        with c2:
-            mz_range = st.slider(
-                "m/z range", mz_lo, max(mz_hi, mz_lo + 1.0), (mz_lo, max(mz_hi, mz_lo + 1.0)),
-                step=1.0, key=f"export_mz_{file_key}",
-            )
-        with c3:
-            ms_levels = st.multiselect(
-                "MS levels", levels, default=levels, key=f"export_levels_{file_key}"
-            )
-
-        out_path = filtered_output_path(st.session_state.workspace, selected_file)
-        result_key = f"export_result_{file_key}"
-        if st.button("Create filtered mzML", disabled=not ms_levels):
-            with st.spinner("Filtering..."):
-                try:
-                    backend = export_filtered_mzml(
-                        selected_file,
-                        out_path,
-                        # Widgets show minutes; mzML stores seconds. Widen by a hair so
-                        # spectra on the rounded bounds are kept.
-                        (rt_range[0] * 60 - 0.01, rt_range[1] * 60 + 0.01),
-                        mz_range,
-                        ms_levels,
-                    )
-                    st.session_state[result_key] = {"ok": True, "backend": backend}
-                except (ValueError, RuntimeError) as err:
-                    st.session_state[result_key] = {"ok": False, "error": str(err)}
-
-        result = st.session_state.get(result_key)
-        if result and not result["ok"]:
-            st.error(result["error"])
-        elif result and out_path.exists():
-            size_mb = out_path.stat().st_size / 1e6
-            st.caption(f"{out_path.name}: {size_mb:.1f} MB, written with {result['backend']}.")
-            with open(out_path, "rb") as fh:
-                st.download_button(
-                    "Download filtered mzML", fh, file_name=out_path.name, mime="application/xml"
-                )
-
-
-export_section()
+catalog = available_catalog(ctx)
+layout, _ = resolve_layout(layout_path(st.session_state.workspace), catalog, DEFAULT_LAYOUT)
+render_layout(layout[0], renderers(ctx), {c["name"]: c["label"] for c in catalog})
