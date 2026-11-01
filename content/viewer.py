@@ -14,7 +14,6 @@ Layout:
 
 from pathlib import Path
 
-import numpy as np
 import streamlit as st
 import polars as pl
 import pyarrow.parquet as pq
@@ -30,7 +29,7 @@ from src.preprocessing.identification import (
     load_search_params,
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
-from src.export import export_filtered_mzml, filtered_output_path
+from src.export import export_table_selection, filtered_output_path, peak_window
 from src.components.factory import (
     create_ms_components,
     create_id_components,
@@ -276,52 +275,63 @@ else:
 # =============================================================================
 
 
+def _pagination_state(table, state):
+    """A table's own sort and column filter state from the shared selection state."""
+    identifier = getattr(table, "_pagination_identifier", None) or f"{table._cache_id}_page"
+    return state.get(identifier) or {}
+
+
+def _describe_window(window):
+    parts = []
+    for key, label in (("mz", "m/z"), ("int", "intensity")):
+        bounds = window[key]
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        if lo is not None and hi is not None:
+            parts.append(f"{label} {lo:g} to {hi:g}")
+        elif lo is not None:
+            parts.append(f"{label} ≥ {lo:g}")
+        else:
+            parts.append(f"{label} ≤ {hi:g}")
+    return ", ".join(parts)
+
+
 @st.fragment
 def export_section():
-    """Write a copy of the mzML restricted to an RT range, m/z range and MS levels."""
+    """Write a copy of the mzML holding what the Spectra and Peak List tables show."""
     with st.expander("Export filtered mzML"):
-        meta = pl.read_parquet(paths["metadata"], columns=["retention_time", "ms_level"])
-        mz_bounds = (
-            pl.scan_parquet(paths["peaks"])
-            .select(pl.col("mass").min().alias("lo"), pl.col("mass").max().alias("hi"))
-            .collect()
-            .row(0)
+        spectra_table = (
+            id_components["spectra_table_with_ids"]
+            if has_ids and id_components
+            else ms_components["spectra_table"]
         )
-        rt_lo = float(np.floor(meta["retention_time"].min() * 100) / 100)
-        rt_hi = float(np.ceil(meta["retention_time"].max() * 100) / 100)
-        mz_lo = float(np.floor(mz_bounds[0] or 0.0))
-        mz_hi = float(np.ceil(mz_bounds[1] or 0.0))
-        levels = sorted(int(v) for v in meta["ms_level"].unique().to_list())
+        peaks_table = ms_components["peaks_table"]
+        state = state_manager.get_state_for_vue()
 
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            rt_range = st.slider(
-                "RT range (min)", rt_lo, max(rt_hi, rt_lo + 0.01), (rt_lo, max(rt_hi, rt_lo + 0.01)),
-                step=0.01, key=f"export_rt_{file_key}",
-            )
-        with c2:
-            mz_range = st.slider(
-                "m/z range", mz_lo, max(mz_hi, mz_lo + 1.0), (mz_lo, max(mz_hi, mz_lo + 1.0)),
-                step=1.0, key=f"export_mz_{file_key}",
-            )
-        with c3:
-            ms_levels = st.multiselect(
-                "MS levels", levels, default=levels, key=f"export_levels_{file_key}"
-            )
+        metadata = pl.read_parquet(paths["metadata"], columns=["scan_id", "retention_time", "ms_level"])
+        scan_ids = spectra_table.export_data(state)["scan_id"].to_list()
+        peak_filters = _pagination_state(peaks_table, state).get("column_filters", [])
+        window = peak_window(peak_filters)
+
+        summary = f"{len(scan_ids):,} of {metadata.height:,} spectra"
+        if len(scan_ids) < metadata.height:
+            summary += " (the rows of the Spectra table)"
+        described = _describe_window(window)
+        summary += f", peaks with {described} (the Peak List filters)." if described else ", all peaks."
+        st.markdown(f"**Exports** {summary}")
+        st.caption(
+            "Filter the Spectra table (RT, MS level, precursor m/z, ...) and the m/z and "
+            "intensity columns of the Peak List to change what is exported."
+        )
 
         out_path = filtered_output_path(st.session_state.workspace, selected_file)
         result_key = f"export_result_{file_key}"
-        if st.button("Create filtered mzML", disabled=not ms_levels):
+        if st.button("Create filtered mzML", disabled=not scan_ids):
             with st.spinner("Filtering..."):
                 try:
-                    backend = export_filtered_mzml(
-                        selected_file,
-                        out_path,
-                        # Widgets show minutes; mzML stores seconds. Widen by a hair so
-                        # spectra on the rounded bounds are kept.
-                        (rt_range[0] * 60 - 0.01, rt_range[1] * 60 + 0.01),
-                        mz_range,
-                        ms_levels,
+                    backend = export_table_selection(
+                        selected_file, out_path, metadata, scan_ids, peak_filters
                     )
                     st.session_state[result_key] = {"ok": True, "backend": backend}
                 except (ValueError, RuntimeError) as err:
