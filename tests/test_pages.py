@@ -24,8 +24,10 @@ def test_page_renders(page, tmp_path):
 
 
 @pytest.mark.parametrize("online, has_console", [(False, True), (True, False)])
-def test_tools_console_only_in_local_app(online, has_console, tmp_path):
+def test_tools_console_only_in_local_app(online, has_console, tmp_path, monkeypatch):
     """The Python console runs arbitrary code, so the hosted app must not show it."""
+    # Online workspaces live under $WORKSPACES_DIR, not settings["workspaces_dir"]
+    monkeypatch.setenv("WORKSPACES_DIR", str(tmp_path / "online"))
     import shutil
     from pathlib import Path
 
