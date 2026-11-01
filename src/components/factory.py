@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, SequenceView
+from openms_insight import Table, LinePlot, Heatmap, SequenceView, SeriesPlot
 
 
 def create_ms_components(
@@ -358,8 +358,7 @@ def create_chromatogram_components(
     """Create the MS1 TIC and BPC line plots.
 
     Clicking a point selects that MS1 spectrum (``spectrum`` identifier), so
-    the spectra table, peak list and spectrum plot follow; the selected
-    spectrum is marked with a dashed line. Insight reuses the on-disk cache
+    the spectra table, peak list and spectrum plot follow. Insight reuses the on-disk cache
     when the configuration is unchanged, so calling this on every rerun is
     cheap.
 
@@ -376,8 +375,8 @@ def create_chromatogram_components(
         ("tic", "Total Ion Chromatogram (MS1)", "Total intensity"),
         ("bpc", "Base Peak Chromatogram (MS1)", "Base peak intensity"),
     ):
-        plots[column] = LinePlot(
-            cache_id=f"{prefix}{column}_plot",
+        plots[column] = SeriesPlot(
+            cache_id=f"{prefix}{column}_series",
             data_path=str(paths["chromatogram"]),
             cache_path=cache_path,
             filters={"im_dimension": "im_id"} if use_im_filter else None,
@@ -387,7 +386,8 @@ def create_chromatogram_components(
             title=title,
             x_label="Retention Time (min)",
             y_label=y_label,
-            plot_mode="line",
+            mode="lines",
+            show_legend=False,
         )
     return plots
 
