@@ -50,6 +50,7 @@ def temp_cache_paths(temp_workspace):
         "spectrum_plot": components_dir / "spectrum_plot.parquet",
         "heatmap_input": components_dir / "heatmap_input.parquet",
         "im_table": components_dir / "im_table.parquet",
+        "chromatogram": components_dir / "chromatogram.parquet",
         "spectra_table_with_ids": components_dir / "spectra_table_with_ids.parquet",
         "component_cache": components_dir / "component_cache",
         "search_params": id_dir / "search_params.json",
