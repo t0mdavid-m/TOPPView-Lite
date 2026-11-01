@@ -22,6 +22,7 @@ from src.preprocessing.identification import (
     link_identifications_to_spectra, find_matching_idxml, load_search_params,
 )
 from src.components.factory import create_id_components
+from src.preprocessing.features import FEATURE_DIR_NAME
 import polars as pl
 
 params = page_setup()
@@ -361,6 +362,65 @@ if idxml_files_list:
             st.rerun()
         if c1.button("⚠️ Remove **all** idXML", disabled=not idxml_files_list):
             fileupload.remove_all_idXML_files()
+            st.rerun()
+
+# ======================= featureXML Upload Section =======================
+v_space(2)
+st.markdown("---")
+st.markdown("### Feature Data (Optional)")
+st.markdown("""
+Upload featureXML files (e.g. from FeatureFinderCentroided or FeatureFinderMultiplex) to browse detected
+features next to the peak map. Files are matched to mzML files by filename
+(e.g., `sample.mzML` ↔ `sample.featureXML`).
+""")
+
+feature_dir = Path(st.session_state.workspace, FEATURE_DIR_NAME)
+feature_dir.mkdir(parents=True, exist_ok=True)
+
+with st.form("featureXML-upload", clear_on_submit=True):
+    feature_uploads = st.file_uploader(
+        "featureXML files",
+        accept_multiple_files=(st.session_state.location == "local"),
+        type=["featureXML"],
+    )
+    cols = st.columns(3)
+    if cols[1].form_submit_button("Add featureXML files", type="primary"):
+        if not feature_uploads:
+            st.warning("Select files first.")
+        else:
+            if not isinstance(feature_uploads, list):
+                feature_uploads = [feature_uploads]
+            for upload in feature_uploads:
+                Path(feature_dir, Path(upload.name).name).write_bytes(upload.getbuffer())
+            st.success(f"Added {len(feature_uploads)} featureXML file(s).")
+
+feature_files = sorted(
+    f for f in feature_dir.iterdir() if f.suffix.lower() == ".featurexml"
+)
+if feature_files:
+    mzml_stems = {f.stem.lower() for f in Path(st.session_state.workspace, "mzML-files").iterdir()}
+    st.markdown("##### featureXML files in workspace:")
+    show_table(pd.DataFrame({
+        "featureXML file": [f.name for f in feature_files],
+        "Status": [
+            "Matched to mzML" if f.stem.lower() in mzml_stems else "No matching mzML"
+            for f in feature_files
+        ],
+    }))
+    with st.expander("🗑️ Remove featureXML files"):
+        to_remove_features = st.multiselect(
+            "select featureXML files", options=[f.name for f in feature_files]
+        )
+        c1, c2 = st.columns(2)
+        if c2.button(
+            "Remove **selected** featureXML", type="primary", disabled=not to_remove_features
+        ):
+            for name in to_remove_features:
+                Path(feature_dir, name).unlink(missing_ok=True)
+            st.rerun()
+        if c1.button("⚠️ Remove **all** featureXML"):
+            for f in feature_files:
+                f.unlink(missing_ok=True)
             st.rerun()
 
 save_params(params)
