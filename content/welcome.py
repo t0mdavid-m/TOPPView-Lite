@@ -7,6 +7,7 @@ import streamlit as st
 from pathlib import Path
 
 from src.common.common import page_setup
+from src.common.installers import installers_available, render_installer_buttons
 
 
 # Page setup
@@ -261,10 +262,9 @@ def render_navigation_buttons():
         )
 
 
-def render_windows_download():
-    """Render the Windows download section if the installer is available."""
-    installer_path = Path("OpenMS-App-Setup.exe")
-    if not installer_path.exists():
+def render_desktop_download():
+    """Render the desktop app download section: one button per platform with an installer."""
+    if not installers_available():
         return False
 
     st.markdown("---")
@@ -275,36 +275,16 @@ def render_windows_download():
         st.markdown(
             """
             <div class="download-box">
-                <div class="download-box-title">📥 TOPPView-Lite for Windows</div>
+                <div class="download-box-title">📥 TOPPView-Lite desktop app</div>
                 <div class="download-box-desc">
-                    Download the offline version to use without an internet connection.
+                    Download the offline version for Windows, macOS or Linux to use without an internet connection.
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        # Create columns for centered button
-        btn_spacer1, btn_col, btn_spacer2 = st.columns([1, 2, 1])
-        with btn_col:
-            with open(installer_path, "rb") as file:
-                st.download_button(
-                    label="Download for Windows",
-                    data=file,
-                    file_name="TOPPView-Lite-Setup.exe",
-                    mime="application/vnd.microsoft.portable-executable",
-                    type="primary",
-                    width="stretch",
-                )
-
-        st.markdown(
-            """
-            <div class="download-box-hint">
-                Run the installer to install the app for your user; no admin rights are needed.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        render_installer_buttons(app_name="TOPPView-Lite")
 
     return True
 
@@ -380,7 +360,7 @@ def main():
     inject_custom_css()
     render_hero_section()
     render_navigation_buttons()
-    render_windows_download()
+    render_desktop_download()
     render_features()
     render_quick_start()
 
