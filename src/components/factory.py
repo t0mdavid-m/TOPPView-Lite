@@ -359,6 +359,7 @@ def create_feature_table(
     feature_parquet: str,
     cache_path: str,
     file_id: str = "",
+    regenerate_cache: bool = False,
 ) -> Table:
     """Features table for a featureXML linked to the mzML.
 
@@ -379,6 +380,7 @@ def create_feature_table(
         cache_id=f"{prefix}feature_table",
         data_path=feature_parquet,
         cache_path=cache_path,
+        regenerate_cache=regenerate_cache,
         interactivity={"feature": "feature_id"},
         column_definitions=[
             {"field": "feature_id", "title": "#", "sorter": "number", "width": 70},
