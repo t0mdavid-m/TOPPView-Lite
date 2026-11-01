@@ -9,7 +9,19 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, SequenceView
+from openms_insight import Table, LinePlot, Heatmap, SequenceView, SeriesPlot
+
+# openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
+# SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
+# AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
+if not hasattr(SequenceView, "_get_render_key"):
+    SequenceView._get_render_key = lambda self: None
+
+# openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
+# SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
+# AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
+if not hasattr(SequenceView, "_get_render_key"):
+    SequenceView._get_render_key = lambda self: None
 
 # openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
 # SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
@@ -354,6 +366,48 @@ def create_id_components(
         "sequence_view": sequence_view,
         "annotated_spectrum_plot": annotated_spectrum_plot,
     }
+
+
+def create_chromatogram_components(
+    paths: dict,
+    im_info: dict,
+    file_id: str = "",
+) -> Dict[str, Any]:
+    """Create the MS1 TIC and BPC line plots.
+
+    Clicking a point selects that MS1 spectrum (``spectrum`` identifier), so
+    the spectra table, peak list and spectrum plot follow. Insight reuses the on-disk cache
+    when the configuration is unchanged, so calling this on every rerun is
+    cheap.
+
+    Returns:
+        Dict with keys ``tic`` and ``bpc``.
+    """
+    use_im_filter = im_info.get("type") != "none" and im_info.get("num_dimensions", 0) > 1
+    cache_path = str(paths["component_cache"])
+    prefix = f"{file_id}_" if file_id else ""
+    paths["component_cache"].mkdir(parents=True, exist_ok=True)
+
+    plots = {}
+    for column, title, y_label in (
+        ("tic", "Total Ion Chromatogram (MS1)", "Total intensity"),
+        ("bpc", "Base Peak Chromatogram (MS1)", "Base peak intensity"),
+    ):
+        plots[column] = SeriesPlot(
+            cache_id=f"{prefix}{column}_series",
+            data_path=str(paths["chromatogram"]),
+            cache_path=cache_path,
+            filters={"im_dimension": "im_id"} if use_im_filter else None,
+            interactivity={"spectrum": "scan_id"},
+            x_column="retention_time",
+            y_column=column,
+            title=title,
+            x_label="Retention Time (min)",
+            y_label=y_label,
+            mode="lines",
+            show_legend=False,
+        )
+    return plots
 
 
 def reconstruct_ms_components(

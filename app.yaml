@@ -1,0 +1,46 @@
+# App spec: what this app is. Schema and checker come from the template
+# (utils/app_spec.schema.json, `python -m utils.app_spec`); the weekly
+# template-sync job reads `template:` and `sync.app_owned` from here.
+# App-owned: template syncs never overwrite this file.
+spec_version: 1
+template:
+  repository: OpenMS/streamlit-template
+  branch: main
+app:
+  slug: toppview-lite
+  name: TOPPView-Lite
+  description: 'Browser viewer for mzML and identification results: peak maps, spectra and chromatograms.'
+  repository: t0mdavid-m/TOPPView-Lite
+  domain: visualization
+results:
+- role: peakmap
+  page: content/viewer.py
+- role: spectrum
+  page: content/viewer.py
+pages:
+- content/welcome.py
+- content/upload.py
+- content/viewer.py
+deploy:
+  k8s:
+    enabled: false
+  docker_compose: true
+  desktop:
+  - windows
+  online_deployment: false
+sync:
+  app_owned:
+  - app.yaml
+  - app.py
+  - settings.json
+  - default-parameters.json
+  - presets.json
+  - README.md
+  - content/*
+  - src/python-tools/*
+  - example-data/*
+  - assets/*
+  - k8s/overlays/*
+  - src/components/*
+  - src/integration/*
+  - src/preprocessing/*
