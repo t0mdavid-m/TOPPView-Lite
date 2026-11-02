@@ -22,7 +22,7 @@ if __name__ == '__main__':
     # Streamlit cannot register a page without listing it.
     sync = st.session_state.settings.get("workspace_sync", {}).get("enabled")
     if sync:
-        pages["Others Topics"].append(
+        list(pages.values())[-1].append(
             st.Page(Path("content", "workspace_sync.py"), title="Workspace Sync", icon="🔄")
         )
 
