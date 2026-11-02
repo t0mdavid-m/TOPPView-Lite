@@ -28,6 +28,12 @@ patches:
       - op: replace
         path: /spec/routes/0/services/0/name
         value: toppview-lite-streamlit
+      - op: replace
+        path: /spec/routes/1/match
+        value: (Host(`toppview-lite.webapps.openms.de`) || Host(`toppview-lite.webapps.openms.org`)) && PathPrefix(`/sync`)
+      - op: replace
+        path: /spec/routes/1/services/0/name
+        value: toppview-lite-sync
   - target:
       kind: Deployment
       name: streamlit
@@ -49,6 +55,13 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: "2Gi"
+  - target:
+      kind: Deployment
+      name: sync
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "redis://toppview-lite-redis:6379/0"
   - target:
       kind: Deployment
       name: rq-worker
