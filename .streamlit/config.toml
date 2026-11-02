@@ -1,8 +1,17 @@
 [browser]
 gatherUsageStats = false
 
+[client]
+# Hides the "Deploy" button; the menu keeps only settings, print and about.
+toolbarMode = "minimal"
+
 [global]
 developmentMode = false
+
+[secrets]
+# Kubernetes mounts the optional `streamlit-secrets` Secret at /app/admin-secrets/;
+# the default locations are kept so local `streamlit run` picks up ./.streamlit/secrets.toml.
+files = ["/app/admin-secrets/secrets.toml", "~/.streamlit/secrets.toml", ".streamlit/secrets.toml"]
 
 [server]
 maxUploadSize = 10240  # 10 GB
@@ -13,21 +22,18 @@ enableXsrfProtection = false
 fileWatcherType = "none"
 
 
-[theme]
-# The preset Streamlit theme that your custom theme inherits from. One of "light" or "dark".
-base = "dark"
 
+[theme]
+# Theme settings shared by the light and dark theme go here (font, radius, ...).
+# Do not set "base": a base pins the app to that theme and removes the
+# light/dark choice. With both [theme.light] and [theme.dark] defined, the app
+# follows the operating system's color scheme, and users can switch in the
+# app menu (⋮ → Settings → "Choose app theme").
+
+[theme.light]
 # Primary accent color for interactive elements.
 primaryColor = "#29379b"
 
-# Background color for the main content area.
-# backgroundColor =
-
-# Background color used for the sidebar and most interactive widgets.
-# secondaryBackgroundColor =
-
-# Color used for almost all text.
-# textColor =
-
-# Font family for all text in the app, except code blocks. One of "sans serif", "serif", or "monospace".
-# font =
+[theme.dark]
+# Lighter shade of the OpenMS blue, readable on the dark background.
+primaryColor = "#7d8ce8"

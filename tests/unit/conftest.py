@@ -11,23 +11,9 @@ import pytest
 import polars as pl
 
 # Add project root to path for imports
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
 
-# Create mock for pyopenms to avoid dependency on actual OpenMS installation
-mock_pyopenms = MagicMock()
-mock_pyopenms.__version__ = "3.0.0"
-
-# Mock AASequence
-mock_aa_sequence = MagicMock()
-mock_aa_sequence.fromString = MagicMock(return_value=MagicMock(
-    getMonoWeight=MagicMock(return_value=1234.56),
-    size=MagicMock(return_value=0),
-))
-mock_pyopenms.AASequence = mock_aa_sequence
-mock_pyopenms.IdXMLFile = MagicMock
-
-sys.modules['pyopenms'] = mock_pyopenms
 
 
 @pytest.fixture
@@ -64,6 +50,7 @@ def temp_cache_paths(temp_workspace):
         "spectrum_plot": components_dir / "spectrum_plot.parquet",
         "heatmap_input": components_dir / "heatmap_input.parquet",
         "im_table": components_dir / "im_table.parquet",
+        "chromatogram": components_dir / "chromatogram.parquet",
         "spectra_table_with_ids": components_dir / "spectra_table_with_ids.parquet",
         "component_cache": components_dir / "component_cache",
         "search_params": id_dir / "search_params.json",

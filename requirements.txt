@@ -111,7 +111,7 @@ six==1.17.0
     # via python-dateutil
 smmap==5.0.2
     # via gitdb
-streamlit==1.49.1
+streamlit==1.51.0
     # via
     #   src (pyproject.toml)
     #   streamlit-js-eval
@@ -140,4 +140,12 @@ xlsxwriter
 
 # Additional dependencies for TOPPView-Lite viewer
 polars>=0.19.0
-openms-insight>=0.1.4
+openms-insight>=0.4.0
+
+# Redis Queue dependencies (for online mode)
+redis>=5.0.0
+rq>=1.16.0
+
+# Reads Bruker timsTOF .d folders (TDF) for the conversion to mzML
+# (src/python-tools/bruker_to_mzml.py). Open-source, no vendor library.
+timsrust_pyo3==0.4.1
