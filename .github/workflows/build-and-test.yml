@@ -5,7 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['v*']
+    # `v1.2` and app-prefixed release tags such as `OpenDDA-1.3` or
+    # `FLASHApp-1.1.0` both publish versioned images (`<tag>-full`, ...).
+    tags: ['v*', '*-[0-9]+.[0-9]*']
   workflow_dispatch:
 
 env:
@@ -255,6 +257,15 @@ jobs:
         run: |
           source .github/scripts/ci-assertions.sh
           assert_storage_identity_values
+
+      - name: Assert the storage names carry the app slug
+        # k8s/storage/ cannot take a namePrefix, so its namespace, StorageClass
+        # and Ganesha release name are written by hand. A fork that kept the
+        # template's names would share them with every other fork on the
+        # cluster; this compares all eight with the prod overlay's namePrefix.
+        run: |
+          source .github/scripts/ci-assertions.sh
+          assert_storage_names_match_slug
 
       - name: Assert no node pinning anywhere
         # Invariant 1: Kubernetes decides placement, the config must not.
@@ -717,6 +728,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read the storage namespace
+        # The storage root carries its namespace by hand (it cannot take a
+        # namePrefix, see k8s/storage/kustomization.yaml), and a fork renames
+        # it. Reading it here instead of naming it keeps this job working in
+        # every fork that renamed it correctly.
+        run: |
+          # yq, not a text match: a quoted `namespace: "x"` is valid YAML.
+          if ! STORAGE_NS=$(yq '.namespace' k8s/storage/kustomization.yaml); then
+            echo "::error::could not parse k8s/storage/kustomization.yaml"
+            exit 1
+          fi
+          if [ -z "$STORAGE_NS" ] || [ "$STORAGE_NS" = "null" ]; then
+            echo "::error::k8s/storage/kustomization.yaml sets no top-level namespace"
+            exit 1
+          fi
+          echo "STORAGE_NS=$STORAGE_NS" >> "$GITHUB_ENV"
+          echo "storage namespace: $STORAGE_NS"
+
       - name: Free disk space
         # ubuntu-latest has ~14 GB free; the full image (5-8 GB) plus kind
         # node image plus loading the OCI tar into both docker and kind can
@@ -799,7 +828,10 @@ jobs:
           # moving, not the passage of time: bump kind, then read the support
           # table again.
           kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/kind/deploy.yaml
-          kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=90s
+          # rollout status waits for the controller pod to exist; `kubectl wait`
+          # on a selector fails at once ("no matching resources found") when
+          # it runs before the Deployment has created the pod.
+          kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
 
       - name: Set up Helm
         # kubectl kustomize --enable-helm shells out to `helm` to inflate the
@@ -974,28 +1006,28 @@ jobs:
           # retry loop exists to report.
           if [ "$applied" -ne 1 ]; then
             echo "::error::could not apply k8s/storage/ after 5 attempts"
-            kubectl get all -n toppview-lite-storage || true
+            kubectl get all -n ${STORAGE_NS} || true
             exit 1
           fi
           # `kubectl wait --all` reports success against zero objects, so the
           # server has to be found before it is waited on. `|| true` because an
           # empty result must reach the explicit check below rather than kill
           # the step through `bash -e`.
-          WORKLOADS=$(kubectl get deploy,statefulset -n toppview-lite-storage -o name 2>/dev/null || true)
+          WORKLOADS=$(kubectl get deploy,statefulset -n ${STORAGE_NS} -o name 2>/dev/null || true)
           if [ -z "$WORKLOADS" ]; then
-            echo "::error::k8s/storage/ created no Deployment or StatefulSet in toppview-lite-storage"
-            kubectl get all -n toppview-lite-storage
+            echo "::error::k8s/storage/ created no Deployment or StatefulSet in ${STORAGE_NS}"
+            kubectl get all -n ${STORAGE_NS}
             exit 1
           fi
           for w in $WORKLOADS; do
-            kubectl rollout status -n toppview-lite-storage "$w" --timeout=300s
+            kubectl rollout status -n ${STORAGE_NS} "$w" --timeout=300s
           done
-          kubectl get pods,pvc -n toppview-lite-storage -o wide
+          kubectl get pods,pvc -n ${STORAGE_NS} -o wide
           kubectl get storageclass
           # Diagnostic, never a gate: this is the filesystem nfs-provisioner
           # measures when it decides whether a workspace claim fits.
-          kubectl exec -n toppview-lite-storage \
-            "$(kubectl get pod -n toppview-lite-storage -l app=nfs-server -o name | head -n1)" \
+          kubectl exec -n ${STORAGE_NS} \
+            "$(kubectl get pod -n ${STORAGE_NS} -l app=nfs-server -o name | head -n1)" \
             -- df -h /export || true
 
       - name: Deploy with Kustomize
@@ -1165,6 +1197,10 @@ jobs:
             curl -fsS --resolve "$host:8080:127.0.0.1" "http://$host:8080/_stcore/health"
             echo ""
             echo "$host -> 200 OK"
+            # Workspace sync Deployment, routed at /sync (answers health even
+            # while workspace_sync is disabled).
+            curl -fsS --resolve "$host:8080:127.0.0.1" "http://$host:8080/sync/health" | grep -q '"tus"'
+            echo "$host/sync -> 200 OK"
           done
 
       # Everything below is `.github/scripts/ci-assertions.sh`. Each assertion
@@ -1286,10 +1322,10 @@ jobs:
           echo "=== pods (all namespaces) ==="
           kubectl get pods -A -o wide || true
           echo "=== storage tier ==="
-          kubectl get all,pvc -n toppview-lite-storage -o wide || true
-          kubectl describe pods -n toppview-lite-storage || true
-          for p in $(kubectl get pods -n toppview-lite-storage -o name 2>/dev/null); do
-            kubectl logs -n toppview-lite-storage "$p" --all-containers --prefix --tail=200 || true
+          kubectl get all,pvc -n ${STORAGE_NS} -o wide || true
+          kubectl describe pods -n ${STORAGE_NS} || true
+          for p in $(kubectl get pods -n ${STORAGE_NS} -o name 2>/dev/null); do
+            kubectl logs -n ${STORAGE_NS} "$p" --all-containers --prefix --tail=200 || true
           done
           echo "=== storage classes and volumes ==="
           kubectl get storageclass || true
@@ -1391,7 +1427,7 @@ jobs:
           for n in $NODES; do
             docker exec "$n" sh -c 'umount -f -l -a -t nfs,nfs4' || true
           done
-          kubectl delete ns toppview-lite-storage --wait=false || true
+          kubectl delete ns ${STORAGE_NS} --wait=false || true
 
           echo "=== residual NFS mounts (expected: none) ==="
           residual=""
@@ -1452,6 +1488,24 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read the storage namespace
+        # The storage root carries its namespace by hand (it cannot take a
+        # namePrefix, see k8s/storage/kustomization.yaml), and a fork renames
+        # it. Reading it here instead of naming it keeps this job working in
+        # every fork that renamed it correctly.
+        run: |
+          # yq, not a text match: a quoted `namespace: "x"` is valid YAML.
+          if ! STORAGE_NS=$(yq '.namespace' k8s/storage/kustomization.yaml); then
+            echo "::error::could not parse k8s/storage/kustomization.yaml"
+            exit 1
+          fi
+          if [ -z "$STORAGE_NS" ] || [ "$STORAGE_NS" = "null" ]; then
+            echo "::error::k8s/storage/kustomization.yaml sets no top-level namespace"
+            exit 1
+          fi
+          echo "STORAGE_NS=$STORAGE_NS" >> "$GITHUB_ENV"
+          echo "storage namespace: $STORAGE_NS"
 
       - name: Free disk space
         # ubuntu-latest has ~14 GB free; the full image (5-8 GB) plus kind
@@ -1690,28 +1744,28 @@ jobs:
           # retry loop exists to report.
           if [ "$applied" -ne 1 ]; then
             echo "::error::could not apply k8s/storage/ after 5 attempts"
-            kubectl get all -n toppview-lite-storage || true
+            kubectl get all -n ${STORAGE_NS} || true
             exit 1
           fi
           # `kubectl wait --all` reports success against zero objects, so the
           # server has to be found before it is waited on. `|| true` because an
           # empty result must reach the explicit check below rather than kill
           # the step through `bash -e`.
-          WORKLOADS=$(kubectl get deploy,statefulset -n toppview-lite-storage -o name 2>/dev/null || true)
+          WORKLOADS=$(kubectl get deploy,statefulset -n ${STORAGE_NS} -o name 2>/dev/null || true)
           if [ -z "$WORKLOADS" ]; then
-            echo "::error::k8s/storage/ created no Deployment or StatefulSet in toppview-lite-storage"
-            kubectl get all -n toppview-lite-storage
+            echo "::error::k8s/storage/ created no Deployment or StatefulSet in ${STORAGE_NS}"
+            kubectl get all -n ${STORAGE_NS}
             exit 1
           fi
           for w in $WORKLOADS; do
-            kubectl rollout status -n toppview-lite-storage "$w" --timeout=300s
+            kubectl rollout status -n ${STORAGE_NS} "$w" --timeout=300s
           done
-          kubectl get pods,pvc -n toppview-lite-storage -o wide
+          kubectl get pods,pvc -n ${STORAGE_NS} -o wide
           kubectl get storageclass
           # Diagnostic, never a gate: this is the filesystem nfs-provisioner
           # measures when it decides whether a workspace claim fits.
-          kubectl exec -n toppview-lite-storage \
-            "$(kubectl get pod -n toppview-lite-storage -l app=nfs-server -o name | head -n1)" \
+          kubectl exec -n ${STORAGE_NS} \
+            "$(kubectl get pod -n ${STORAGE_NS} -l app=nfs-server -o name | head -n1)" \
             -- df -h /export || true
 
       - name: Deploy with Kustomize (full manifests, no filter)
@@ -1782,7 +1836,7 @@ jobs:
           SLUG=$(yq '.commonLabels.app' k8s/overlays/prod/kustomization.yaml)
           TRAEFIK_HOSTS=$(kubectl kustomize k8s/overlays/prod/ \
             | yq 'select(.kind == "IngressRoute") | .spec.routes[].match' \
-            | grep -oP "Host\(\`\K[^\`]+" | tr '\n' ' ')
+            | grep -oP "Host\(\`\K[^\`]+" | sort -u | tr '\n' ' ')
           # This shell has no pipefail, so a grep that matches nothing yields an
           # empty string with exit 0 - and "Curl both hostnames via Traefik"
           # below, the ONLY place this job exercises the app through Traefik,
@@ -1886,6 +1940,9 @@ jobs:
             curl -fsS --resolve "$host:8080:127.0.0.1" "http://$host:8080/_stcore/health"
             echo ""
             echo "$host -> 200 OK"
+            # Workspace sync Deployment, routed at /sync by routes/1.
+            curl -fsS --resolve "$host:8080:127.0.0.1" "http://$host:8080/sync/health" | grep -q '"tus"'
+            echo "$host/sync -> 200 OK"
             curled=$((curled + 1))
           done
           # A loop that ran zero times is otherwise indistinguishable from a
@@ -2014,10 +2071,10 @@ jobs:
           echo "=== pods (all namespaces) ==="
           kubectl get pods -A -o wide || true
           echo "=== storage tier ==="
-          kubectl get all,pvc -n toppview-lite-storage -o wide || true
-          kubectl describe pods -n toppview-lite-storage || true
-          for p in $(kubectl get pods -n toppview-lite-storage -o name 2>/dev/null); do
-            kubectl logs -n toppview-lite-storage "$p" --all-containers --prefix --tail=200 || true
+          kubectl get all,pvc -n ${STORAGE_NS} -o wide || true
+          kubectl describe pods -n ${STORAGE_NS} || true
+          for p in $(kubectl get pods -n ${STORAGE_NS} -o name 2>/dev/null); do
+            kubectl logs -n ${STORAGE_NS} "$p" --all-containers --prefix --tail=200 || true
           done
           echo "=== storage classes and volumes ==="
           kubectl get storageclass || true
@@ -2101,7 +2158,7 @@ jobs:
           for n in $NODES; do
             docker exec "$n" sh -c 'umount -f -l -a -t nfs,nfs4' || true
           done
-          kubectl delete ns toppview-lite-storage --wait=false || true
+          kubectl delete ns ${STORAGE_NS} --wait=false || true
 
           echo "=== residual NFS mounts (expected: none) ==="
           residual=""

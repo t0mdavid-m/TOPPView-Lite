@@ -291,7 +291,9 @@ Several of the storage tier's names are **cluster-scoped**, or would otherwise c
 | `k8s/base/workspace-pvc.yaml` | `storageClassName`, which must equal `storageClass.name` above |
 | `k8s/storage/networkpolicy.yaml` | the `app: template-app` literal, which must equal `commonLabels.app` in your overlay |
 
-The last two are checked by CI: `assert_netpol_string_matches_overlay` compares the label, and the kind jobs fail the deploy if the workspaces PVC names a StorageClass the storage root does not publish.
+CI checks all of them. `assert_storage_names_match_slug` compares every name with your overlay's `namePrefix` (`<slug>-storage`, `<slug>-nfs`, `<slug>-nfs-server`), so a fork that kept `template-app-` fails its build instead of taking over another fork's storage on the shared cluster. `assert_netpol_string_matches_overlay` compares the label, and the kind jobs read the storage namespace from `k8s/storage/kustomization.yaml`, so no workflow edit is needed after the rename.
+
+If your app is already deployed under the template names, the rename is a data migration (new namespace, new backing volume, new StorageClass), and no runbook for it exists yet: `docs/a16-storage-runbook.md` covers the earlier RWO-to-NFS cutover, which starts from a fresh NFS volume. Plan it with the cluster operator (apply the renamed storage root next to the old one, copy the workspaces across with a one-off job that mounts both claims, then switch the overlay) instead of applying the renamed manifests over the old ones. None of the apps deployed from this template ran the storage tier when this check was added, so a fork adopting the storage tier for the first time renames before its first apply and has nothing to migrate.
 
 ### Step 5 — Configure the admin password (optional)
 
@@ -347,6 +349,16 @@ kubectl -n openms rollout status deployment/<your-app-name>-streamlit --timeout=
 ```
 
 Smoke-test the ingress URL in a browser — the app should load, a session cookie `stroute` should be set, and uploading a file should work.
+
+### GitOps with Argo CD
+
+Instead of running Step 6 by hand on every change, Argo CD can apply the overlay from git:
+
+- One Application per app on `k8s/overlays/prod`, with automatic sync, prune and self-heal. Turn automatic sync on only after a first manual sync whose diff you have read.
+- The storage root is an Application of its own on `k8s/storage`, **without** automatic sync. It needs `kustomize.buildOptions: --enable-helm` in `argocd-cm`.
+- The namespaces and both PVCs carry `argocd.argoproj.io/sync-options: Prune=false,Delete=false`. All apps share the `openms` namespace, and deleting a claim on `cinder-csi` deletes its volume, so Argo CD must never remove them.
+- Ignore the data of `<prefix>-streamlit-secrets` (`ignoreDifferences` plus `RespectIgnoreDifferences=true`). The admin password is patched live (Step 5), and self-heal would reset it.
+- Argo CD rolls out changes in git. A rebuilt image under a moving tag (`main-full`, `latest`) is not one, so pin `images[0].newTag` to a release tag through a PR (the `release-app` skill).
 
 ### Automation with Claude skills
 
