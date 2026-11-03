@@ -44,3 +44,6 @@ sync:
   - src/components/*
   - src/integration/*
   - src/preprocessing/*
+  - k8s/argocd/*
+  - CLAUDE.app.md
+  - conda-requirements.txt
