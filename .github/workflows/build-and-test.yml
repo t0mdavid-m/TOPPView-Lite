@@ -5,7 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
-    tags: ['v*']
+    # `v1.2` and app-prefixed release tags such as `OpenDDA-1.3` or
+    # `FLASHApp-1.1.0` both publish versioned images (`<tag>-full`, ...).
+    tags: ['v*', '*-[0-9]+.[0-9]*']
   workflow_dispatch:
 
 env:
@@ -826,7 +828,10 @@ jobs:
           # moving, not the passage of time: bump kind, then read the support
           # table again.
           kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/kind/deploy.yaml
-          kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=90s
+          # rollout status waits for the controller pod to exist; `kubectl wait`
+          # on a selector fails at once ("no matching resources found") when
+          # it runs before the Deployment has created the pod.
+          kubectl -n ingress-nginx rollout status deployment/ingress-nginx-controller --timeout=180s
 
       - name: Set up Helm
         # kubectl kustomize --enable-helm shells out to `helm` to inflate the
