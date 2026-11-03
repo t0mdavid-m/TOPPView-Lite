@@ -132,6 +132,11 @@ def create_component_inputs(
         pl.col("intensity") > 0
     ).collect().write_parquet(paths["heatmap_input"])
 
+    # MS1 total ion and base peak chromatograms
+    if status_callback:
+        status_callback("Creating TIC/BPC input...")
+    create_chromatogram_input(paths, im_info)
+
     # Create ion mobility summary table if IM data exists
     if has_im:
         if status_callback:
@@ -140,6 +145,47 @@ def create_component_inputs(
 
     if status_callback:
         status_callback("Component inputs created")
+
+
+def create_chromatogram_input(paths: dict, im_info: Optional[dict] = None) -> None:
+    """Write the MS1 total ion (TIC) and base peak (BPC) chromatogram.
+
+    One row per MS1 spectrum with ``scan_id``, ``retention_time`` (minutes),
+    ``tic`` (sum of intensities) and ``bpc`` (highest intensity), plus
+    ``im_id`` when the file has ion mobility. Spectra without peaks get 0.
+    """
+    if im_info is None:
+        im_info = load_im_info(paths)
+    has_im = im_info.get("type") != "none"
+
+    per_scan = (
+        pl.scan_parquet(paths["peaks"])
+        .group_by("scan_id")
+        .agg(
+            pl.col("intensity").sum().cast(pl.Float64).alias("tic"),
+            pl.col("intensity").max().cast(pl.Float64).alias("bpc"),
+        )
+    )
+    meta_cols = ["scan_id", "retention_time"] + (["im_id"] if has_im else [])
+    chromatogram = (
+        pl.scan_parquet(paths["metadata"])
+        .filter(pl.col("ms_level") == 1)
+        .select(meta_cols)
+        .join(per_scan, on="scan_id", how="left")
+        .with_columns(pl.col("tic").fill_null(0.0), pl.col("bpc").fill_null(0.0))
+        .sort("retention_time")
+        .collect()
+    )
+    paths["chromatogram"].parent.mkdir(parents=True, exist_ok=True)
+    chromatogram.write_parquet(paths["chromatogram"])
+
+
+def ensure_chromatogram_input(paths: dict, im_info: Optional[dict] = None) -> None:
+    """Create the TIC/BPC input for caches built before it existed."""
+    target = paths["chromatogram"]
+    if target.exists() and target.stat().st_mtime >= paths["peaks"].stat().st_mtime:
+        return
+    create_chromatogram_input(paths, im_info)
 
 
 def create_spectra_table_with_ids(

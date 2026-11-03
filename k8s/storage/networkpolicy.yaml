@@ -103,7 +103,7 @@ spec:
               # one transformer, so if the two strings drift, all of them lose
               # the mount at once and the symptom is a hung mount at deploy
               # time rather than a lint error. Hence the CI assertion.
-              app: template-app
+              app: toppview-lite
       ports:
         # 2049 only, and only TCP. The clients mount NFSv4.1, which carries
         # mount, lock and status over this single port; NFSv3 would also need

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot
+from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
 
 # Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
 # MirrorPlot needs disjoint identifiers for its two halves.
@@ -358,6 +358,48 @@ def create_id_components(
         "sequence_view": sequence_view,
         "annotated_spectrum_plot": annotated_spectrum_plot,
     }
+
+
+def create_chromatogram_components(
+    paths: dict,
+    im_info: dict,
+    file_id: str = "",
+) -> Dict[str, Any]:
+    """Create the MS1 TIC and BPC line plots.
+
+    Clicking a point selects that MS1 spectrum (``spectrum`` identifier), so
+    the spectra table, peak list and spectrum plot follow. Insight reuses the on-disk cache
+    when the configuration is unchanged, so calling this on every rerun is
+    cheap.
+
+    Returns:
+        Dict with keys ``tic`` and ``bpc``.
+    """
+    use_im_filter = im_info.get("type") != "none" and im_info.get("num_dimensions", 0) > 1
+    cache_path = str(paths["component_cache"])
+    prefix = f"{file_id}_" if file_id else ""
+    paths["component_cache"].mkdir(parents=True, exist_ok=True)
+
+    plots = {}
+    for column, title, y_label in (
+        ("tic", "Total Ion Chromatogram (MS1)", "Total intensity"),
+        ("bpc", "Base Peak Chromatogram (MS1)", "Base peak intensity"),
+    ):
+        plots[column] = SeriesPlot(
+            cache_id=f"{prefix}{column}_series",
+            data_path=str(paths["chromatogram"]),
+            cache_path=cache_path,
+            filters={"im_dimension": "im_id"} if use_im_filter else None,
+            interactivity={"spectrum": "scan_id"},
+            x_column="retention_time",
+            y_column=column,
+            title=title,
+            x_label="Retention Time (min)",
+            y_label=y_label,
+            mode="lines",
+            show_legend=False,
+        )
+    return plots
 
 
 def reconstruct_ms_components(
