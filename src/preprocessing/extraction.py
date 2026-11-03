@@ -28,6 +28,7 @@ def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
         ├── spectrum_plot.parquet
         ├── heatmap_input.parquet
         ├── im_table.parquet
+        ├── chromatogram.parquet  (MS1 TIC/BPC)
         └── component_cache/  (for openms_insight caches)
     """
     cache_dir = Path(workspace) / ".cache" / mzml_path.stem
@@ -46,6 +47,7 @@ def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
         "spectrum_plot": components_dir / "spectrum_plot.parquet",
         "heatmap_input": components_dir / "heatmap_input.parquet",
         "im_table": components_dir / "im_table.parquet",
+        "chromatogram": components_dir / "chromatogram.parquet",
         # Component cache directory (for openms_insight caches)
         "component_cache": components_dir / "component_cache",
     }

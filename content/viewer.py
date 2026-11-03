@@ -5,6 +5,7 @@ with cross-component selection linking.
 
 Layout:
 - Ion Mobility table (if FAIMS data present)
+- TIC / BPC chromatogram (click selects the MS1 spectrum)
 - Heatmap (peak map)
 - Spectra table (with # IDs column if identifications present) | Peaks table (side by side)
 - Spectrum plot (annotated if identification selected)
@@ -21,7 +22,14 @@ from openms_insight import StateManager
 from openms_insight.rendering.bridge import clear_component_cache
 
 from src.common.common import page_setup
-from src.preprocessing import get_cache_paths, raw_cache_is_valid, component_cache_is_valid, load_im_info, preprocess_file
+from src.preprocessing import (
+    get_cache_paths,
+    raw_cache_is_valid,
+    component_cache_is_valid,
+    ensure_chromatogram_input,
+    load_im_info,
+    preprocess_file,
+)
 from src.preprocessing.identification import (
     get_id_cache_paths,
     id_cache_is_valid,
@@ -39,6 +47,7 @@ from src.components.tool_panel import console_panel, operation_panel
 from src.components.factory import (
     create_ms_components,
     create_feature_table,
+    create_chromatogram_components,
     create_id_components,
     reconstruct_ms_components,
     reconstruct_id_components,
@@ -253,6 +262,21 @@ with st.expander("Tools", icon="🧰"):
 # Ion Mobility table (if present)
 if ms_components["im_table"] is not None:
     ms_components["im_table"](key=f"{file_key}_im_table", state_manager=state_manager, height=400)
+
+# TIC / BPC (full width). Clicking a point selects that MS1 spectrum.
+ensure_chromatogram_input(paths, im_info)
+chromatograms = create_chromatogram_components(paths, im_info, file_id)
+chromatogram_kind = st.segmented_control(
+    "Chromatogram",
+    options=["tic", "bpc"],
+    format_func={"tic": "TIC", "bpc": "BPC"}.get,
+    default="tic",
+    key="viewer_chromatogram_kind",
+    label_visibility="collapsed",
+) or "tic"
+chromatograms[chromatogram_kind](
+    key=f"{file_key}_{chromatogram_kind}_plot", state_manager=state_manager, height=250
+)
 
 # Heatmap (full width)
 ms_components["heatmap"](key=f"{file_key}_heatmap", state_manager=state_manager, height=400)

@@ -6,7 +6,7 @@
 #        why rendering this root needs `kubectl kustomize --enable-helm`.
 #
 # One userspace Ganesha pod re-exports the single ReadWriteOnce Cinder volume
-# in `template-app-storage` as ReadWriteMany, which is what lets streamlit,
+# in `toppview-lite-storage` as ReadWriteMany, which is what lets streamlit,
 # the rq-workers and the nightly cleanup CronJob be placed on any node instead
 # of all being stuck on whichever node the Cinder volume is attached to.
 #
@@ -35,16 +35,16 @@
 # ---------------------------------------------------------------------------
 #   nfs-server-data        the Cinder PVC in nfs-backing-pvc.yaml, consumed
 #                          below as `persistence.existingClaim`
-#   template-app-nfs       the StorageClass name the workspaces PVC in `openms`
+#   toppview-lite-nfs       the StorageClass name the workspaces PVC in `openms`
 #                          claims. Cluster scoped, hence the app prefix
-#   template-app-nfs-server  every object this chart renders, and the
+#   toppview-lite-nfs-server  every object this chart renders, and the
 #                          provisioner name. The ClusterRole and
 #                          ClusterRoleBinding among them are cluster scoped,
 #                          hence the app prefix
 #   nfs-server             the `app` label on the server pod, which the
 #                          storage runbook addresses it by. Namespaced, so
 #                          it needs no prefix
-#   template-app-storage   the namespace, which must enforce the `privileged`
+#   toppview-lite-storage   the namespace, which must enforce the `privileged`
 #                          Pod Security Standard - see `securityContext` below
 #
 # The prefixed three exist because several forks of this template share the
@@ -78,7 +78,7 @@
 # Note for whoever runs section 4.6: this chart renders a StatefulSet, not a
 # Deployment, so it is `scale statefulset -l app=nfs-server`.
 nameOverride: nfs-server
-fullnameOverride: template-app-nfs-server
+fullnameOverride: toppview-lite-nfs-server
 
 # NOT A TUNABLE.
 # The chart's own template says it: "TODO: Investigate how/if nfs-provisioner
@@ -163,7 +163,7 @@ storageClass:
   # export. Hence the app prefix. The workspaces PVC in `openms` claims exactly
   # this name; CI's "Verify the workspace StorageClass contract" step fails the
   # deploy if the two ever drift.
-  name: template-app-nfs
+  name: toppview-lite-nfs
   defaultClass: false
 
   # Pinned rather than derived. Left unset the chart generates
@@ -174,7 +174,7 @@ storageClass:
   # cluster-wide identifier, which is the second reason for the app prefix:
   # two forks sharing `cluster.local/nfs-server` would each answer the other's
   # provisioning requests.
-  provisionerName: cluster.local/template-app-nfs-server
+  provisionerName: cluster.local/toppview-lite-nfs-server
 
   # NOT A TUNABLE.
   # The chart defaults to `Delete`, as does the cluster's `cinder-csi` class -
@@ -230,7 +230,7 @@ rbac:
 # Restated at the chart default on purpose, because it is load-bearing rather
 # than incidental: Ganesha needs DAC_READ_SEARCH and SYS_RESOURCE to serve an
 # export it does not own, and it exports `no_root_squash`. Those capabilities
-# are the reason this workload lives in `template-app-storage` at
+# are the reason this workload lives in `toppview-lite-storage` at
 # `pod-security.kubernetes.io/enforce=privileged` instead of in `openms`,
 # which is shared with another application. Removing them does not harden
 # anything; it stops the server working.
