@@ -454,7 +454,9 @@ jobs:
     # image - so the coverage worth rescuing from a one-variant break is the
     # kind suite, not this. Add the same override here if that ever changes.
     needs: [build-full-amd64, build-simple-amd64]
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: the apptainer .deb depends on libfuse3-3,
+    # which Ubuntu 26.04 no longer ships, so installing apptainer fails there.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -625,7 +627,9 @@ jobs:
     # on-the-fly OCI->SIF conversion the docker:// path requires.
     needs: test-apptainer
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: the apptainer .deb depends on libfuse3-3,
+    # which Ubuntu 26.04 no longer ships, so installing apptainer fails there.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
