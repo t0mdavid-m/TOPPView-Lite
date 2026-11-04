@@ -1,8 +1,8 @@
 {
     "app-name": "TOPPView-Lite",
-    "github-user": "OpenMS",
+    "github-user": "t0mdavid-m",
     "version": "0.2.0",
-    "repository-name": "toppview-lite",
+    "repository-name": "TOPPView-Lite",
     "shared_exports_path": "/shared-exports/",
     "legal_links": {
         "impressum": "https://openms.de/impressum",
