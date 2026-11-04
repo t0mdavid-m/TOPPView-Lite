@@ -35,6 +35,7 @@ sync:
   - settings.json
   - default-parameters.json
   - presets.json
+  - parameter-names.json
   - README.md
   - content/*
   - src/python-tools/*
@@ -44,3 +45,6 @@ sync:
   - src/components/*
   - src/integration/*
   - src/preprocessing/*
+  - k8s/argocd/*
+  - CLAUDE.app.md
+  - conda-requirements.txt

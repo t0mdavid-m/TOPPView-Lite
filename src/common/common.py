@@ -74,6 +74,70 @@ def get_legal_links() -> dict[str, str]:
     return {**DEFAULT_LEGAL_LINKS, **{k: v for k, v in overrides.items() if v}}
 
 
+# The OpenMS logo is used for every branding image a settings.json does not set.
+DEFAULT_LOGO = "assets/openms_transparent_bg_logo.svg"
+
+
+def get_branding(theme: str | None = None) -> dict[str, str]:
+    """
+    Return the images that brand the app for the active light or dark theme.
+
+    The optional "branding" object in settings.json sets them:
+
+      * "page_icon": the browser tab icon (one image; the tab ignores the theme),
+      * "logo": the image at the top of the sidebar,
+      * "logo_icon": the smaller image shown when the sidebar is collapsed,
+      * "app_icon": an icon for the app's own pages to use, e.g. next to a
+        title (the template shows it nowhere itself; it is also the default
+        "logo_icon"),
+      * "logo_size": "small", "medium" (default) or "large"; a wide logo with
+        the app name in it reads better at "large".
+
+    Each of "logo", "logo_icon" and "app_icon" is either one path or an object
+    {"light": path, "dark": path}. Anything not set, or set to an empty value,
+    falls back to the OpenMS logo. A "logo_icon" that is not set follows
+    "app_icon", then "logo".
+
+    Args:
+        theme (str | None): "light" or "dark". None reads the active theme
+            from st.context, which is unknown before the first rerun; the light
+            images are used then.
+
+    Returns:
+        dict[str, str]: The paths for "page_icon", "logo", "logo_icon" and
+            "app_icon", and the "logo_size".
+    """
+    if theme is None:
+        try:
+            theme = st.context.theme.type
+        except Exception:
+            theme = None
+    theme = "dark" if theme == "dark" else "light"
+    branding = (
+        st.session_state.settings.get("branding", {})
+        if "settings" in st.session_state
+        else {}
+    ) or {}
+
+    def pick(key: str) -> str:
+        value = branding.get(key)
+        if isinstance(value, dict):
+            value = value.get(theme) or value.get("light") or value.get("dark")
+        return value or ""
+
+    logo = pick("logo") or DEFAULT_LOGO
+    app_icon = pick("app_icon") or logo
+    return {
+        "page_icon": pick("page_icon") or DEFAULT_LOGO,
+        "logo": logo,
+        "logo_icon": pick("logo_icon") or app_icon,
+        "app_icon": app_icon,
+        "logo_size": branding.get("logo_size")
+        if branding.get("logo_size") in ("small", "medium", "large")
+        else "medium",
+    }
+
+
 def is_safe_workspace_name(name: str) -> bool:
     """
     Check if a workspace name is safe (no path traversal characters).
@@ -244,19 +308,6 @@ def copy_demo_workspace(demo_name: str, target_path: Path) -> bool:
         return False
 
 
-def _keep_fragment_non_empty():
-    """Give an auto-rerunning fragment one element even when it shows nothing.
-
-    Precaution against a white page reported in Firefox after a page switch,
-    with the frontend throwing "Bad 'setIn' index". The suspected cause is a
-    `run_every` fragment that renders no element on a run, so a later delta
-    targets a block the browser no longer has. An empty placeholder keeps the
-    fragment's block in the element tree on every run.
-    """
-    st.empty()
-
-
-@st.fragment(run_every=5)
 def monitor_hardware():
     """
     Display CPU and RAM of the machine running this Streamlit process.
@@ -281,10 +332,8 @@ def monitor_hardware():
     st.caption(f"Last fetched at: {time.strftime('%H:%M:%S')}")
 
 
-@st.fragment(run_every=5)
 def monitor_queue():
     """Display queue metrics in sidebar (online mode only)"""
-    _keep_fragment_non_empty()
     try:
         from src.workflow.health import get_queue_metrics
 
@@ -326,7 +375,6 @@ def monitor_queue():
         pass  # Silently fail if queue not available
 
 
-@st.fragment(run_every=5)
 def monitor_storage():
     """
     Display shared storage status in sidebar.
@@ -334,7 +382,7 @@ def monitor_storage():
     Reads Redis and nothing else. The workspace volume is a shared NFS mount
     online, and its failure mode is a hang rather than an error: a `stat` on a
     `hard` mount that has wedged blocks in uninterruptible sleep and cannot be
-    killed, so a fragment re-running every 5 seconds would accumulate unkillable
+    killed, so a panel re-reading it on every rerun would accumulate unkillable
     threads - this indicator would become the very hang it exists to report.
     The mount is touched by the rq-worker readiness probe instead, which
     publishes a per node heartbeat whose Redis TTL is the liveness mechanism.
@@ -343,7 +391,6 @@ def monitor_storage():
     docker-compose, apptainer - because a red tick for a mechanism that is not
     deployed is a false alarm pointing at the wrong layer.
     """
-    _keep_fragment_non_empty()
     try:
         from src.workflow.health import get_storage_status
 
@@ -354,6 +401,7 @@ def monitor_storage():
         state = status.get("state", "unknown")
         nodes = status.get("nodes") or []
         stale = status.get("stale_nodes") or []
+        departed = status.get("departed_nodes") or []
 
         st.markdown("---")
         st.markdown("**Storage Status**")
@@ -364,6 +412,13 @@ def monitor_storage():
                 f"{len(nodes)} node{'' if len(nodes) == 1 else 's'} reporting a "
                 "healthy shared volume."
             )
+            if departed:
+                # A worker that moved or stopped, not a mount fault: it stops
+                # being listed once its registration expires.
+                st.caption(
+                    f"{', '.join(departed)} stopped reporting: its worker moved "
+                    "or stopped."
+                )
         elif state == "degraded":
             # The case per node heartbeats exist for. Collapsing them would
             # show green here, because a healthy node is still reporting.
@@ -411,20 +466,41 @@ def render_resource_utilization():
       Redis and no queue, so the psutil panel is the only content there is.
       Gating it on `online_deployment` left the expander empty.
     """
+    with st.expander("📊 **Resource Utilization**"):
+        _resource_panels()
+
+
+@st.fragment
+def _resource_panels():
+    """
+    The panels of the "Resource Utilization" expander, refreshed by a button.
+
+    They update on every rerun of the page and when the button reruns just this
+    fragment. They used to rerun themselves with `run_every=5`, which crashed
+    online pages with "Bad 'setIn' index": a timer that fired as the user
+    switched pages sent its rerun tagged with the page being left, the server
+    ran it after the new page, and the browser took it for a page change,
+    cleared the page and then received the panel's elements for a sidebar it
+    no longer had. The window is one network round trip, so it showed online
+    and not locally.
+    """
     from src.workflow.health import get_queue_metrics, queue_workers_are_remote
 
-    with st.expander("📊 **Resource Utilization**"):
-        # `{}` means "no queue in this deployment" - the same distinction
-        # get_queue_metrics() already draws for the metrics themselves.
-        metrics = get_queue_metrics()
-        if metrics:
-            monitor_queue()
-            monitor_storage()
-        # Short-circuited on `available`: an unreachable queue is not evidence
-        # that the workers are elsewhere, and this saves the second round trip
-        # in exactly the case where Redis is slow to answer.
-        if not (metrics.get("available") and queue_workers_are_remote()):
-            monitor_hardware()
+    st.button(
+        "Refresh", icon=":material/refresh:", key="resource-utilization-refresh",
+        type="tertiary", help="Fetch the current numbers",
+    )
+    # `{}` means "no queue in this deployment" - the same distinction
+    # get_queue_metrics() already draws for the metrics themselves.
+    metrics = get_queue_metrics()
+    if metrics:
+        monitor_queue()
+        monitor_storage()
+    # Short-circuited on `available`: an unreachable queue is not evidence
+    # that the workers are elsewhere, and this saves the second round trip
+    # in exactly the case where Redis is slow to answer.
+    if not (metrics.get("available") and queue_workers_are_remote()):
+        monitor_hardware()
 
 
 def load_params(default: bool = False) -> dict[str, Any]:
@@ -520,7 +596,7 @@ def page_setup(page: str = "") -> dict[str, Any]:
     # Set Streamlit page configurations
     st.set_page_config(
         page_title=st.session_state.settings["app-name"],
-        page_icon="assets/openms_transparent_bg_logo.svg",
+        page_icon=get_branding()["page_icon"],
         layout="wide",
         initial_sidebar_state="auto",
         menu_items=None,
@@ -540,7 +616,12 @@ def page_setup(page: str = "") -> dict[str, Any]:
         unsafe_allow_html=True,
     )
 
-    st.logo("assets/openms_transparent_bg_logo.svg")
+    branding = get_branding()
+    st.logo(
+        branding["logo"],
+        size=branding["logo_size"],
+        icon_image=branding["logo_icon"],
+    )
 
     # Create google analytics if consent was given
     if (
