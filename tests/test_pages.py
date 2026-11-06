@@ -10,7 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 
 @pytest.mark.parametrize(
-    "page", ["content/welcome.py", "content/upload.py", "content/viewer.py", "content/tools.py"]
+    "page", ["content/welcome.py", "content/upload.py", "content/viewer.py", "content/layout.py", "content/tools.py"]
 )
 def test_page_renders(page, tmp_path):
     at = AppTest.from_file(page)
@@ -63,3 +63,4 @@ def _tiny_mzml(tmp_path):
     path = tmp_path / "tiny.mzML"
     oms.MzMLFile().store(str(path), exp)
     return path
+
