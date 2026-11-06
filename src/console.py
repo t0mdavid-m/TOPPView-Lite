@@ -55,20 +55,17 @@ picker = oms.PeakPickerHiRes()
 params = picker.getParameters()
 params.setValue("signal_to_noise", 1.0)
 picker.setParameters(params)
-picked = oms.MSExperiment()
-picker.pickExperiment(exp, picked, True)
+picked = picker.pickExperiment(exp, True)
 save_mzml(picked, f"{stem}_centroided")
 """,
     "FeatureFinderMetabo": """\
 exp.sortSpectra(True)
 mtd = oms.MassTraceDetection()
 p = mtd.getParameters(); p.setValue("mass_error_ppm", 10.0); mtd.setParameters(p)
-traces = []
-mtd.run(exp, traces, 0)
-split = []
-oms.ElutionPeakDetection().detectPeaks(traces, split)
-features, chroms = oms.FeatureMap(), []
-oms.FeatureFindingMetabo().run(split, features, chroms)
+traces = mtd.run(exp, 0)
+split = oms.ElutionPeakDetection().detectPeaks(traces)
+features = oms.FeatureMap()
+oms.FeatureFindingMetabo().run(split, features)
 features.setUniqueIds()
 print(f"{features.size()} features")
 save_features(features, stem)  # same name as the mzML: the viewer shows it

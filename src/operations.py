@@ -49,7 +49,10 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
         entry = param.getEntry(raw_key)
         value_type = param.getValueType(raw_key)
         value = param.getValue(raw_key)
-        choices = [_s(v) for v in entry.valid_strings]
+        # pyOpenMS 3.6 refuses valid_strings on a boolean entry (isBool); older
+        # releases expose booleans as strings restricted to "true"/"false".
+        is_bool = bool(getattr(entry, "isBool", lambda: False)())
+        choices = ["false", "true"] if is_bool else [_s(v) for v in entry.valid_strings]
         info: Dict[str, Any] = {
             "key": f"{prefix}{key}",
             "value": value,
@@ -59,7 +62,10 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
             "min": None,
             "max": None,
         }
-        if value_type == _STRING:
+        if is_bool or isinstance(value, bool):
+            info["type"] = "bool"
+            info["value"] = value if isinstance(value, bool) else _s(value) == "true"
+        elif value_type == _STRING:
             info["value"] = _s(value)
             if sorted(choices) == ["false", "true"]:
                 info["type"] = "bool"
@@ -162,8 +168,7 @@ def _run_peak_picking(in_path: Path, out_path: Path, params: Dict[str, oms.Param
     exp = _load(in_path)
     picker = oms.PeakPickerHiRes()
     picker.setParameters(params[""])
-    picked = oms.MSExperiment()
-    picker.pickExperiment(exp, picked, True)
+    picked = picker.pickExperiment(exp, True)
     oms.MzMLFile().store(str(out_path), picked)
     return f"Centroided {picked.getNrSpectra()} spectra."
 
@@ -171,9 +176,7 @@ def _run_peak_picking(in_path: Path, out_path: Path, params: Dict[str, oms.Param
 def _mass_traces(exp: oms.MSExperiment, params: Dict[str, oms.Param]) -> list:
     mtd = oms.MassTraceDetection()
     mtd.setParameters(params["mtd:"])
-    traces = []
-    mtd.run(exp, traces, 0)
-    return traces
+    return mtd.run(exp, 0)
 
 
 def _run_mass_traces(in_path: Path, out_path: Path, params: Dict[str, oms.Param]) -> str:
@@ -202,13 +205,11 @@ def _run_feature_finder_metabo(in_path: Path, out_path: Path, params: Dict[str, 
     traces = _mass_traces(exp, params)
     epd = oms.ElutionPeakDetection()
     epd.setParameters(params["epd:"])
-    split = []
-    epd.detectPeaks(traces, split)
+    split = epd.detectPeaks(traces)
     ffm = oms.FeatureFindingMetabo()
     ffm.setParameters(params["ffm:"])
     fmap = oms.FeatureMap()
-    chromatograms = []
-    ffm.run(split, fmap, chromatograms)
+    ffm.run(split, fmap)
     fmap.setUniqueIds()
     fmap.ensureUniqueId()
     fmap.setPrimaryMSRunPath([str(in_path).encode()])
