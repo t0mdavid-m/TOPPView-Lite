@@ -8,7 +8,7 @@ Layout:
 - TIC / BPC chromatogram (click selects the MS1 spectrum)
 - Heatmap (peak map)
 - Spectra table (with # IDs column if identifications present) | Peaks table (side by side)
-- Spectrum plot (annotated if identification selected)
+- Spectrum plot (annotated, or mirrored against the theoretical b/y ions, if identification selected)
 - Identifications table (if identifications present)
 - SequenceView (if identification selected)
 """
@@ -50,7 +50,10 @@ from src.components.factory import (
     create_id_components,
     reconstruct_ms_components,
     reconstruct_id_components,
+    create_mirror_plot,
+    MIRROR_BOTTOM_IDENTIFIER,
 )
+from src.preprocessing.mirror import ensure_mirror_input
 
 
 # Page setup
@@ -279,13 +282,61 @@ with col2:
 # =============================================================================
 
 if has_ids and id_components:
-    # Annotated spectrum plot (linked to SequenceView)
-    id_components["annotated_spectrum_plot"](
-        key=f"{file_key}_spectrum_plot",
-        state_manager=state_manager,
-        height=400,
-        sequence_view_key=f"{file_key}_sequence_view"
+    spectrum_mode = st.segmented_control(
+        "Spectrum view",
+        ["Annotated", "Mirror vs. theoretical"],
+        default="Annotated",
+        key="viewer_spectrum_mode",
+        label_visibility="collapsed",
     )
+
+    if spectrum_mode == "Mirror vs. theoretical":
+        mirror_key = f"viewer_mirror_{file_key}"
+        mirror_paths, rebuilt = ensure_mirror_input(paths, cached["id_paths"], search_params)
+        if rebuilt or mirror_key not in st.session_state:
+            with st.spinner("Generating theoretical spectra..."):
+                st.session_state[mirror_key] = create_mirror_plot(
+                    mirror_paths["mirror"], cache_path, file_id, regenerate_cache=rebuilt
+                )
+
+        # The bottom half follows the selected identification.
+        selected_id = state_manager.get_selection("identification")
+        if state_manager.get_selection(MIRROR_BOTTOM_IDENTIFIER) != selected_id:
+            if selected_id is None:
+                state_manager.clear_selection(MIRROR_BOTTOM_IDENTIFIER)
+            else:
+                state_manager.set_selection(MIRROR_BOTTOM_IDENTIFIER, selected_id)
+
+        if selected_id is None:
+            st.caption("Select an identification below to compare its spectrum with the theoretical b/y ions.")
+        else:
+            match = (
+                pl.scan_parquet(mirror_paths["summary"])
+                .filter(pl.col("id_idx") == selected_id)
+                .collect()
+            )
+            if match.height:
+                row = match.row(0, named=True)
+                st.caption(
+                    f"{row['matched_ions']} of {row['total_ions']} theoretical b/y ions matched "
+                    f"({row['coverage']:.0f} %). Matched peaks are red and labelled."
+                )
+            else:
+                st.caption("This identification is not linked to a spectrum.")
+
+        st.session_state[mirror_key](
+            key=f"{file_key}_mirror_plot",
+            state_manager=state_manager,
+            height=450,
+        )
+    else:
+        # Annotated spectrum plot (linked to SequenceView)
+        id_components["annotated_spectrum_plot"](
+            key=f"{file_key}_spectrum_plot",
+            state_manager=state_manager,
+            height=400,
+            sequence_view_key=f"{file_key}_sequence_view"
+        )
 
     # Render SequenceView first (computes annotations)
     sv_result = id_components["sequence_view"](
