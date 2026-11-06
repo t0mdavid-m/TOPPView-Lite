@@ -14,6 +14,7 @@ if __name__ == '__main__':
             st.Page(Path("content", "welcome.py"), title="Welcome", icon="👋", default=True),
             st.Page(Path("content", "upload.py"), title="Upload", icon="📂"),
             st.Page(Path("content", "viewer.py"), title="Viewer", icon="👀"),
+            st.Page(Path("content", "tools.py"), title="Tools", icon="🧰"),
         ],
     }
 

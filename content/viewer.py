@@ -44,6 +44,7 @@ from src.preprocessing.features import (
     find_matching_featurexml,
     get_feature_cache_paths,
 )
+from src.components.tool_panel import console_panel, operation_panel
 from src.components.factory import (
     create_ms_components,
     create_feature_table,
@@ -108,6 +109,13 @@ if not preprocessed_files:
 # =============================================================================
 # File Selection
 # =============================================================================
+
+# A tool run that wrote a new mzML asks for it to be opened
+pending_file = st.session_state.pop("viewer_pending_file", None)
+if pending_file is not None:
+    match = [p for p in preprocessed_files if p.name == pending_file]
+    if match:
+        st.session_state["viewer_selected_file"] = match[0]
 
 selected_file = st.selectbox(
     "Select mzML file",
@@ -235,6 +243,26 @@ with st.sidebar:
 state_manager = StateManager(session_key="viewer_state")
 file_key = selected_file.stem
 
+# Tools: run an operation (or, locally, Python) on this file. Results show up
+# on this page right away: a featureXML named like the mzML fills the features
+# table below, and a new mzML is opened.
+with st.expander("Tools", icon="🧰"):
+    tool_tabs = st.tabs(
+        ["Operations"] + (["Python console"] if st.session_state.location == "local" else [])
+    )
+    with tool_tabs[0]:
+        written = operation_panel(st.session_state.workspace, selected_file, key="viewer_tools")
+    if len(tool_tabs) > 1:
+        with tool_tabs[1]:
+            written += console_panel(
+                st.session_state.workspace, selected_file, key="viewer_console",
+                scan_id=state_manager.get_selection("spectrum"),
+            )
+    new_mzml = [p for p in written if p.suffix == ".mzML" and p.name != selected_file.name]
+    if new_mzml:
+        st.session_state["viewer_pending_file"] = new_mzml[-1].name
+        st.rerun()
+
 # Ion Mobility table (if present)
 if ms_components["im_table"] is not None:
     ms_components["im_table"](key=f"{file_key}_im_table", state_manager=state_manager, height=400)
@@ -359,11 +387,12 @@ else:
 featurexml_path = find_matching_featurexml(selected_file, st.session_state.workspace)
 if featurexml_path is not None:
     feature_paths = get_feature_cache_paths(st.session_state.workspace, featurexml_path)
-    if not feature_cache_is_valid(featurexml_path, feature_paths):
+    features_rebuilt = not feature_cache_is_valid(featurexml_path, feature_paths)
+    if features_rebuilt:
         with st.spinner(f"Reading {featurexml_path.name}..."):
             extract_featurexml_to_parquet(featurexml_path, feature_paths, paths["metadata"])
     feature_table = create_feature_table(
-        str(feature_paths["features"]), cache_path, file_id
+        str(feature_paths["features"]), cache_path, file_id, regenerate_cache=features_rebuilt
     )
     st.caption(
         f"Features from {featurexml_path.name}. Click a feature to show the MS1 "
