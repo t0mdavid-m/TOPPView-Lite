@@ -14,6 +14,7 @@ from .component_inputs import (
     ensure_chromatogram_input,
     load_im_info,
 )
+from .ion_mobility import ensure_im_inputs, has_peak_mobility
 from .pipeline import preprocess_file
 
 __all__ = [
@@ -27,5 +28,7 @@ __all__ = [
     "create_chromatogram_input",
     "ensure_chromatogram_input",
     "load_im_info",
+    "ensure_im_inputs",
+    "has_peak_mobility",
     "preprocess_file",
 ]

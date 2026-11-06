@@ -28,6 +28,7 @@ from src.preprocessing import (
     component_cache_is_valid,
     ensure_chromatogram_input,
     load_im_info,
+    ensure_im_inputs,
     preprocess_file,
 )
 from src.preprocessing.identification import (
@@ -49,6 +50,7 @@ from src.components.factory import (
     create_ms_components,
     create_feature_table,
     create_chromatogram_components,
+    create_im_components,
     create_id_components,
     reconstruct_ms_components,
     reconstruct_id_components,
@@ -90,6 +92,26 @@ if st.session_state.get("workspace_source") == "shared":
             preprocess_file(mzml_file)
         # Rerun to ensure clean component state after processing
         st.rerun()
+
+# Files processed by an earlier version are processed again (once per session,
+# so a file that fails to process does not rerun the page forever)
+reprocessed = st.session_state.setdefault("viewer_reprocessed", set())
+outdated_files = []
+for mzml_file in sorted(mzML_dir.glob("*.mzML")):
+    paths = get_cache_paths(st.session_state.workspace, mzml_file)
+    if (
+        str(mzml_file) not in reprocessed
+        and paths["metadata"].exists()
+        and not (raw_cache_is_valid(mzml_file, paths) and component_cache_is_valid(paths))
+    ):
+        outdated_files.append(mzml_file)
+if outdated_files:
+    for mzml_file in outdated_files:
+        reprocessed.add(str(mzml_file))
+        preprocess_file(mzml_file)
+    clear_component_cache()
+    st.session_state.pop("viewer_current_file", None)
+    st.rerun()
 
 # Find preprocessed files
 preprocessed_files = []
@@ -284,6 +306,18 @@ chromatograms[chromatogram_kind](
 
 # Heatmap (full width)
 ms_components["heatmap"](key=f"{file_key}_heatmap", state_manager=state_manager, height=400)
+
+# Ion mobility of the selected spectrum (files with per-peak ion mobility)
+im_inputs_mtime = ensure_im_inputs(paths, im_info)
+if im_inputs_mtime is not None:
+    im_components = create_im_components(paths, im_info, im_inputs_mtime, file_id)
+    im_col1, im_col2 = st.columns([2, 1])
+    with im_col1:
+        im_components["im_map"](key=f"{file_key}_im_map", state_manager=state_manager, height=400)
+    with im_col2:
+        im_components["mobilogram"](
+            key=f"{file_key}_mobilogram", state_manager=state_manager, height=400
+        )
 
 # Tables side by side: Spectra | Peaks
 col1, col2 = st.columns([1, 1])
