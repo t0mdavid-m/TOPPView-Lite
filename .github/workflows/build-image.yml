@@ -52,11 +52,18 @@ on:
       free_disk_space:
         description: >-
           Reclaim runner disk before checkout. True for arm64, whose runner image
-          is tighter out of the box than the amd64 one; false for amd64, which is
-          how these two jobs behaved before they were merged into this file.
+          is tighter out of the box, and for the full amd64 image, whose export
+          no longer fits on a stock amd64 runner.
         required: false
         default: false
         type: boolean
+      openms_branch:
+        description: >-
+          OpenMS branch or tag the full image builds (OPENMS_BRANCH build arg),
+          e.g. v3.6.0 or develop. Empty keeps the Dockerfile's default.
+        required: false
+        default: ''
+        type: string
 
 env:
   # Restated, not inherited: a reusable workflow does not see the caller's `env`
@@ -105,6 +112,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # No automatic `latest`: on a tag push metadata-action would add a
+          # plain `latest` beside the tags below. `latest` is set only by the
+          # raw rule (main pushes of the full image).
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=branch,suffix=-${{ inputs.variant }}-${{ inputs.arch }}
             type=ref,event=tag,suffix=-${{ inputs.variant }}-${{ inputs.arch }}
@@ -118,7 +130,10 @@ jobs:
           file: ${{ inputs.dockerfile }}
           platforms: ${{ inputs.platform }}
           load: true
-          push: ${{ github.event_name != 'pull_request' }}
+          # A build of another OpenMS (openms_branch) is tested from the
+          # artifact below but never pushed, so it cannot replace the
+          # <ref>/<sha>/latest tags of the default build.
+          push: ${{ github.event_name != 'pull_request' && inputs.openms_branch == '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # provenance/attestations turn the pushed tag into a manifest list,
@@ -127,39 +142,37 @@ jobs:
           # image manifest.
           provenance: false
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}/cache:${{ inputs.variant }}-${{ inputs.arch }}
-          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}/cache:{2}-{3},mode=max', env.REGISTRY, env.IMAGE_NAME_LC, inputs.variant, inputs.arch) || '' }}
+          # A build of another OpenMS reads the cache but never writes it, so it
+          # cannot replace the default build's layers.
+          cache-to: ${{ github.event_name != 'pull_request' && inputs.openms_branch == '' && format('type=registry,ref={0}/{1}/cache:{2}-{3},mode=max', env.REGISTRY, env.IMAGE_NAME_LC, inputs.variant, inputs.arch) || '' }}
+          # The token reaches the Dockerfile as a BuildKit secret, never as a
+          # build argument, so it is not recorded in the image or the cache.
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           build-args: |
-            GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+            INSTALLER_REFRESH=${{ github.run_id }}
+            ${{ inputs.openms_branch != '' && format('OPENMS_BRANCH={0}', inputs.openms_branch) || '' }}
 
       - name: Retag for kind (image name the kustomize overlay points at)
         run: |
-          # The kind jobs apply k8s/overlays/ci, which keeps the prod overlay's
-          # `images:` entry (`newName`, `newTag`, e.g. ghcr.io/<owner>/<app>:main-full).
-          # The rendered manifests reference that exact ref with pull policy
-          # Never, so the image must be loaded into kind under that name. Read
-          # it from the overlay, so an app that renames its image keeps working.
-          OVERLAY=k8s/overlays/prod/kustomization.yaml
-          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
-          # The `openms-streamlit` entry of `images:`, parsed as YAML so the
-          # list order and quoting do not matter.
-          read -r NAME TAG < <(python3 - "$OVERLAY" <<'PY'
-          import sys, yaml
-          images = yaml.safe_load(open(sys.argv[1])).get("images") or []
-          entry = next((i for i in images if i.get("name") == "openms-streamlit"), {})
-          print(entry.get("newName", ""), entry.get("newTag", ""))
-          PY
-          )
-          if [ -z "$NAME" ] || [ -z "$TAG" ]; then
-            echo "::error::no newName/newTag for openms-streamlit in $OVERLAY"
+          # The rendered manifests reference the prod overlay's `newName` and
+          # `newTag` exactly, so the image is loaded into kind under that ref.
+          # Read from the overlay, not written here: in an app generated from
+          # the template it names the app's own image, and a hardcoded
+          # template ref leaves every pod in ErrImageNeverPull.
+          overlay=k8s/overlays/prod/kustomization.yaml
+          name=$(awk '$1 == "newName:" {print $2; exit}' "$overlay" | tr -d "\"'")
+          tag=$(awk '$1 == "newTag:" {print $2; exit}' "$overlay" | tr -d "\"'")
+          if [ -z "$name" ] || [ -z "$tag" ]; then
+            echo "::error::$overlay has no images newName/newTag to tag the kind image with"
             exit 1
           fi
-          KIND_REF="$NAME:$TAG"
-          echo "KIND_REF=$KIND_REF" >> "$GITHUB_ENV"
+          echo "KIND_IMAGE=$name:$tag" >> "$GITHUB_ENV"
           FIRST_TAG=$(printf '%s\n' "${{ steps.meta.outputs.tags }}" | head -n 1)
-          docker tag "$FIRST_TAG" "$KIND_REF"
+          docker tag "$FIRST_TAG" "$name:$tag"
 
       - name: Save image as tar
-        run: docker save "$KIND_REF" -o /tmp/image.tar
+        run: docker save "$KIND_IMAGE" -o /tmp/image.tar
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v4

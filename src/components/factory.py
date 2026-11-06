@@ -9,19 +9,11 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, SequenceView, SeriesPlot
+from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
 
-# openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
-# SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
-# AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
-if not hasattr(SequenceView, "_get_render_key"):
-    SequenceView._get_render_key = lambda self: None
-
-# openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
-# SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
-# AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
-if not hasattr(SequenceView, "_get_render_key"):
-    SequenceView._get_render_key = lambda self: None
+# Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
+# MirrorPlot needs disjoint identifiers for its two halves.
+MIRROR_BOTTOM_IDENTIFIER = "mirror_identification"
 
 # openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
 # SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
@@ -150,7 +142,6 @@ def create_ms_components(
         ],
         title="Peak List",
         index_field="peak_id",
-        initial_sort=[{"column": "intensity", "dir": "desc"}],
         default_row=-1,
         server_side_pagination=True,
         page_size=100,
@@ -368,6 +359,61 @@ def create_id_components(
     }
 
 
+def create_feature_table(
+    feature_parquet: str,
+    cache_path: str,
+    file_id: str = "",
+) -> Table:
+    """Features table for a featureXML linked to the mzML.
+
+    Clicking a feature sets the ``feature`` selection; the viewer then
+    selects the MS1 spectrum closest to its apex (``apex_scan_id``). The table
+    does not use the ``spectrum`` identifier itself: an Insight table clears a
+    selection that is not in its rows, which would drop every spectrum that
+    is not a feature apex. Insight reuses the on-disk cache while the
+    configuration is unchanged.
+    """
+    prefix = f"{file_id}_" if file_id else ""
+    money = lambda precision: {  # noqa: E731
+        "sorter": "number",
+        "formatter": "money",
+        "formatterParams": {"precision": precision, "symbol": ""},
+    }
+    return Table(
+        cache_id=f"{prefix}feature_table",
+        data_path=feature_parquet,
+        cache_path=cache_path,
+        interactivity={"feature": "feature_id"},
+        column_definitions=[
+            {"field": "feature_id", "title": "#", "sorter": "number", "width": 70},
+            {"field": "rt", "title": "RT (min)", **money(2)},
+            {"field": "mz", "title": "m/z", **money(4)},
+            {
+                "field": "intensity",
+                "title": "Intensity",
+                "sorter": "number",
+                "formatter": "scientific",
+                "formatterParams": {"precision": 3},
+            },
+            {"field": "charge", "title": "z", "sorter": "number", "width": 50},
+            {"field": "quality", "title": "Quality", **money(3)},
+            {"field": "rt_start", "title": "RT start", **money(2)},
+            {"field": "rt_end", "title": "RT end", **money(2)},
+            {"field": "mz_start", "title": "m/z start", **money(4)},
+            {"field": "mz_end", "title": "m/z end", **money(4)},
+            {"field": "apex_scan_id", "title": "Apex scan", "sorter": "number"},
+        ],
+        hidden_columns=["rt_start", "rt_end", "mz_start", "mz_end", "apex_scan_id"],
+        title="Features",
+        index_field="feature_id",
+        go_to_fields=["feature_id"],
+        initial_sort=[{"column": "intensity", "dir": "desc"}],
+        default_row=-1,
+        server_side_pagination=True,
+        page_size=100,
+    )
+
+
 def create_chromatogram_components(
     paths: dict,
     im_info: dict,
@@ -488,3 +534,41 @@ def reconstruct_id_components(
         "sequence_view": sequence_view,
         "annotated_spectrum_plot": annotated_spectrum_plot,
     }
+
+
+def create_mirror_plot(
+    mirror_parquet: Path,
+    cache_path: str,
+    file_id: str = "",
+    regenerate_cache: bool = False,
+) -> MirrorPlot:
+    """Mirror plot: experimental spectrum (top) against the theoretical b/y ions (bottom).
+
+    Both halves are keyed by the selected identification: the top half through
+    ``identification``, the bottom through ``MIRROR_BOTTOM_IDENTIFIER``, which the
+    viewer sets to the same id before rendering.
+    """
+    prefix = f"{file_id}_" if file_id else ""
+    return MirrorPlot(
+        cache_id=f"{prefix}mirror_plot",
+        data_path=str(mirror_parquet),
+        cache_path=cache_path,
+        regenerate_cache=regenerate_cache,
+        filters_top={"identification": "mirror_top_id"},
+        filter_defaults_top={"identification": -2},
+        filters_bottom={MIRROR_BOTTOM_IDENTIFIER: "mirror_bottom_id"},
+        filter_defaults_bottom={MIRROR_BOTTOM_IDENTIFIER: -2},
+        x_column="mz",
+        y_column="intensity",
+        highlight_column="matched",
+        annotation_column="label",
+        title_top="Experimental",
+        title_bottom="Theoretical (b/y ions)",
+        x_label="m/z",
+        y_label="Intensity",
+        styling={
+            "unhighlightedColor": "#AAAAAA",
+            "highlightColor": "#E74C3C",
+            "selectedColor": "#F3A712",
+        },
+    )
