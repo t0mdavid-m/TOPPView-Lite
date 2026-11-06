@@ -415,6 +415,7 @@ def create_feature_table(
         page_size=100,
     )
 
+
 def create_chromatogram_components(
     paths: dict,
     im_info: dict,

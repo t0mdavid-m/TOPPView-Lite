@@ -49,7 +49,11 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
         entry = param.getEntry(raw_key)
         value_type = param.getValueType(raw_key)
         value = param.getValue(raw_key)
-        choices = [_s(v) for v in entry.valid_strings]
+        try:
+            choices = [_s(v) for v in entry.valid_strings]
+        except TypeError:
+            # pyOpenMS 3.6 stores flags as booleans, which have no string choices
+            choices = []
         info: Dict[str, Any] = {
             "key": f"{prefix}{key}",
             "value": value,
@@ -59,7 +63,9 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
             "min": None,
             "max": None,
         }
-        if value_type == _STRING:
+        if isinstance(value, bool):
+            info["type"] = "bool"
+        elif value_type == _STRING:
             info["value"] = _s(value)
             if sorted(choices) == ["false", "true"]:
                 info["type"] = "bool"
@@ -83,7 +89,9 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
 def _coerce(value: Any, entry: Dict[str, Any]) -> Any:
     kind = entry["type"]
     if kind == "bool":
-        return "true" if value in (True, "true", "True", 1) else "false"
+        flag = value in (True, "true", "True", 1)
+        # pyOpenMS 3.6 keeps flags as booleans; older Params as "true"/"false"
+        return flag if isinstance(entry["value"], bool) and not entry["choices"] else ("true" if flag else "false")
     if kind == "int":
         return int(value)
     if kind == "float":
@@ -162,8 +170,7 @@ def _run_peak_picking(in_path: Path, out_path: Path, params: Dict[str, oms.Param
     exp = _load(in_path)
     picker = oms.PeakPickerHiRes()
     picker.setParameters(params[""])
-    picked = oms.MSExperiment()
-    picker.pickExperiment(exp, picked, True)
+    picked = picker.pickExperiment(exp, True)
     oms.MzMLFile().store(str(out_path), picked)
     return f"Centroided {picked.getNrSpectra()} spectra."
 
@@ -171,9 +178,7 @@ def _run_peak_picking(in_path: Path, out_path: Path, params: Dict[str, oms.Param
 def _mass_traces(exp: oms.MSExperiment, params: Dict[str, oms.Param]) -> list:
     mtd = oms.MassTraceDetection()
     mtd.setParameters(params["mtd:"])
-    traces = []
-    mtd.run(exp, traces, 0)
-    return traces
+    return mtd.run(exp, 0)
 
 
 def _run_mass_traces(in_path: Path, out_path: Path, params: Dict[str, oms.Param]) -> str:
@@ -202,13 +207,11 @@ def _run_feature_finder_metabo(in_path: Path, out_path: Path, params: Dict[str, 
     traces = _mass_traces(exp, params)
     epd = oms.ElutionPeakDetection()
     epd.setParameters(params["epd:"])
-    split = []
-    epd.detectPeaks(traces, split)
+    split = epd.detectPeaks(traces)
     ffm = oms.FeatureFindingMetabo()
     ffm.setParameters(params["ffm:"])
     fmap = oms.FeatureMap()
-    chromatograms = []
-    ffm.run(split, fmap, chromatograms)
+    ffm.run(split, fmap)
     fmap.setUniqueIds()
     fmap.ensureUniqueId()
     fmap.setPrimaryMSRunPath([str(in_path).encode()])
