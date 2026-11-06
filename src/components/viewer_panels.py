@@ -102,10 +102,16 @@ class ViewerContext:
     search_params: Optional[Dict[str, Any]] = None
     featurexml_path: Optional[Path] = None
     local: bool = False
+    # Which experiment of the layout this is; each has its own widget keys
+    index: int = 0
 
     @property
     def file_key(self) -> str:
-        return self.selected_file.stem
+        return self.key(self.selected_file.stem)
+
+    def key(self, name: str) -> str:
+        """A widget key of this experiment (the first keeps the plain name)."""
+        return name if self.index == 0 else f"{name}_e{self.index}"
 
     @property
     def has_ids(self) -> bool:
@@ -141,7 +147,7 @@ def chromatogram(ctx: ViewerContext) -> None:
         options=["tic", "bpc"],
         format_func={"tic": "TIC", "bpc": "BPC"}.get,
         default="tic",
-        key="viewer_chromatogram_kind",
+        key=ctx.key("viewer_chromatogram_kind"),
         label_visibility="collapsed",
     ) or "tic"
     plots[kind](key=f"{ctx.file_key}_{kind}_plot", state_manager=ctx.state_manager, height=250)
@@ -188,7 +194,7 @@ def spectrum(ctx: ViewerContext) -> None:
         "Spectrum view",
         ["Annotated", "Mirror vs. theoretical"],
         default="Annotated",
-        key="viewer_spectrum_mode",
+        key=ctx.key("viewer_spectrum_mode"),
         label_visibility="collapsed",
     )
     if mode != "Mirror vs. theoretical":
@@ -294,11 +300,11 @@ def tools(ctx: ViewerContext) -> None:
     with st.expander("Tools", icon="🧰"):
         tabs = st.tabs(["Operations"] + (["Python console"] if ctx.local else []))
         with tabs[0]:
-            written = operation_panel(ctx.workspace, ctx.selected_file, key="viewer_tools")
+            written = operation_panel(ctx.workspace, ctx.selected_file, key=ctx.key("viewer_tools"))
         if len(tabs) > 1:
             with tabs[1]:
                 written += console_panel(
-                    ctx.workspace, ctx.selected_file, key="viewer_console",
+                    ctx.workspace, ctx.selected_file, key=ctx.key("viewer_console"),
                     scan_id=ctx.state_manager.get_selection("spectrum"),
                 )
     new_mzml = [p for p in written if p.suffix == ".mzML" and p.name != ctx.selected_file.name]
@@ -371,7 +377,9 @@ def export(ctx: ViewerContext) -> None:
 
         out_path = filtered_output_path(ctx.workspace, ctx.selected_file)
         result_key = f"export_result_{file_key}"
-        if st.button("Create filtered mzML", disabled=not scan_ids):
+        if st.button(
+            "Create filtered mzML", disabled=not scan_ids, key=ctx.key("viewer_export_create")
+        ):
             with st.spinner("Filtering..."):
                 try:
                     backend = export_table_selection(
@@ -389,7 +397,8 @@ def export(ctx: ViewerContext) -> None:
             st.caption(f"{out_path.name}: {size_mb:.1f} MB, written with {result['backend']}.")
             with open(out_path, "rb") as fh:
                 st.download_button(
-                    "Download filtered mzML", fh, file_name=out_path.name, mime="application/xml"
+                    "Download filtered mzML", fh, file_name=out_path.name, mime="application/xml",
+                    key=ctx.key("viewer_export_download"),
                 )
 
 
