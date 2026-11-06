@@ -30,13 +30,24 @@ class Workflow(WorkflowManager):
                 name="MS data",
                 file_types=["mzML", "raw", "d"],
                 fallback=[str(f) for f in Path("example-data", "mzML").glob("*.mzML")],
+                # Offer folders for the groups the file names suggest
+                suggest_folders=True,
             )
 
     @st.fragment
     def configure(self) -> None:
         # Allow users to select mzML files for the analysis. reactive=True so
         # the experimental design table follows the selection.
-        self.ui.select_input_file("mzML-files", multiple=True, reactive=True)
+        # upload= adds a Browse button: the files by folder, and adding more,
+        # without going back to the upload page.
+        self.ui.select_input_file(
+            "mzML-files", multiple=True, reactive=True,
+            upload=dict(
+                file_types=["mzML", "raw", "d"],
+                fallback=[str(f) for f in Path("example-data", "mzML").glob("*.mzML")],
+                suggest_folders=True,
+            ),
+        )
 
         # Create tabs for different analysis steps.
         t = st.tabs(
@@ -67,14 +78,14 @@ class Workflow(WorkflowManager):
             # OpenMS design.tsv in the workflow directory. Pass that file to a
             # TOPP tool's -design (e.g. ProteomicsLFQ), or read it in
             # execution() with src.workflow.ExperimentalDesign.load_design().
-            self.ui.experimental_design("mzML-files")
+            self.ui.experimental_design("mzML-files", suggest=True)
 
     def execution(self) -> bool:
         # Return True only if every step succeeded. The caller
-        # (WorkflowManager.workflow_process in local mode, tasks.execute_workflow
-        # in queue mode) writes the "WORKFLOW FINISHED" marker based on this,
-        # and that marker is the only thing the run page reads to decide whether
-        # the workflow succeeded. Returning None marks a successful run failed;
+        # (tasks.execute_workflow, in local and queue mode) writes the
+        # "WORKFLOW FINISHED" marker based on this, and that marker is the only
+        # thing the run page reads to decide whether the workflow succeeded.
+        # Returning None is still accepted, with a deprecation warning;
         # ignoring an executor result marks a failed run successful.
 
         # Any parameter checks, here simply checking if mzML files are selected
