@@ -37,6 +37,7 @@ from src.preprocessing.identification import (
     load_search_params,
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
+from src.export import export_table_selection, filtered_output_path, peak_window
 from src.preprocessing.features import (
     extract_featurexml_to_parquet,
     feature_cache_is_valid,
@@ -386,3 +387,84 @@ if featurexml_path is not None:
             state_manager.clear_selection("peak")
             state_manager.clear_selection("identification")
             st.rerun()
+
+# =============================================================================
+# Export filtered mzML
+# =============================================================================
+
+
+def _pagination_state(table, state):
+    """A table's own sort and column filter state from the shared selection state."""
+    identifier = getattr(table, "_pagination_identifier", None) or f"{table._cache_id}_page"
+    return state.get(identifier) or {}
+
+
+def _describe_window(window):
+    parts = []
+    for key, label in (("mz", "m/z"), ("int", "intensity")):
+        bounds = window[key]
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        if lo is not None and hi is not None:
+            parts.append(f"{label} {lo:g} to {hi:g}")
+        elif lo is not None:
+            parts.append(f"{label} ≥ {lo:g}")
+        else:
+            parts.append(f"{label} ≤ {hi:g}")
+    return ", ".join(parts)
+
+
+@st.fragment
+def export_section():
+    """Write a copy of the mzML holding what the Spectra and Peak List tables show."""
+    with st.expander("Export filtered mzML"):
+        spectra_table = (
+            id_components["spectra_table_with_ids"]
+            if has_ids and id_components
+            else ms_components["spectra_table"]
+        )
+        peaks_table = ms_components["peaks_table"]
+        state = state_manager.get_state_for_vue()
+
+        metadata = pl.read_parquet(paths["metadata"], columns=["scan_id", "retention_time", "ms_level"])
+        scan_ids = spectra_table.export_data(state)["scan_id"].to_list()
+        peak_filters = _pagination_state(peaks_table, state).get("column_filters", [])
+        window = peak_window(peak_filters)
+
+        summary = f"{len(scan_ids):,} of {metadata.height:,} spectra"
+        if len(scan_ids) < metadata.height:
+            summary += " (the rows of the Spectra table)"
+        described = _describe_window(window)
+        summary += f", peaks with {described} (the Peak List filters)." if described else ", all peaks."
+        st.markdown(f"**Exports** {summary}")
+        st.caption(
+            "Filter the Spectra table (RT, MS level, precursor m/z, ...) and the m/z and "
+            "intensity columns of the Peak List to change what is exported."
+        )
+
+        out_path = filtered_output_path(st.session_state.workspace, selected_file)
+        result_key = f"export_result_{file_key}"
+        if st.button("Create filtered mzML", disabled=not scan_ids):
+            with st.spinner("Filtering..."):
+                try:
+                    backend = export_table_selection(
+                        selected_file, out_path, metadata, scan_ids, peak_filters
+                    )
+                    st.session_state[result_key] = {"ok": True, "backend": backend}
+                except (ValueError, RuntimeError) as err:
+                    st.session_state[result_key] = {"ok": False, "error": str(err)}
+
+        result = st.session_state.get(result_key)
+        if result and not result["ok"]:
+            st.error(result["error"])
+        elif result and out_path.exists():
+            size_mb = out_path.stat().st_size / 1e6
+            st.caption(f"{out_path.name}: {size_mb:.1f} MB, written with {result['backend']}.")
+            with open(out_path, "rb") as fh:
+                st.download_button(
+                    "Download filtered mzML", fh, file_name=out_path.name, mime="application/xml"
+                )
+
+
+export_section()
