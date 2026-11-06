@@ -50,7 +50,7 @@ def test_apply_overrides_coerces_and_rejects_unknown():
     base = oms.PeakPickerHiRes().getParameters()
     p = apply_overrides(base, {"signal_to_noise": 2, "report_FWHM": True, "ms_levels": "1, 2"})
     assert p.getValue("signal_to_noise") == 2.0
-    assert p.getValue("report_FWHM") in (True, "true")
+    assert p.getValue("report_FWHM") in (True, "true")  # bool from pyOpenMS 3.6, string before
     assert list(p.getValue("ms_levels")) == [1, 2]
     with pytest.raises(ValueError):
         apply_overrides(base, {"no_such_param": 1})

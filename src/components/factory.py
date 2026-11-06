@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, SequenceView, SeriesPlot, MirrorPlot
+from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
 
 # Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
 # MirrorPlot needs disjoint identifiers for its two halves.

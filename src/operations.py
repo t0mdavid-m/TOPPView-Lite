@@ -49,11 +49,10 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
         entry = param.getEntry(raw_key)
         value_type = param.getValueType(raw_key)
         value = param.getValue(raw_key)
-        try:
-            choices = [_s(v) for v in entry.valid_strings]
-        except TypeError:
-            # pyOpenMS 3.6 stores flags as booleans, which have no string choices
-            choices = []
+        # pyOpenMS 3.6 refuses valid_strings on a boolean entry (isBool); older
+        # releases expose booleans as strings restricted to "true"/"false".
+        is_bool = bool(getattr(entry, "isBool", lambda: False)())
+        choices = ["false", "true"] if is_bool else [_s(v) for v in entry.valid_strings]
         info: Dict[str, Any] = {
             "key": f"{prefix}{key}",
             "value": value,
@@ -63,8 +62,9 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
             "min": None,
             "max": None,
         }
-        if isinstance(value, bool):
+        if is_bool or isinstance(value, bool):
             info["type"] = "bool"
+            info["value"] = value if isinstance(value, bool) else _s(value) == "true"
         elif value_type == _STRING:
             info["value"] = _s(value)
             if sorted(choices) == ["false", "true"]:
@@ -89,9 +89,7 @@ def param_entries(param: oms.Param, prefix: str = "") -> List[Dict[str, Any]]:
 def _coerce(value: Any, entry: Dict[str, Any]) -> Any:
     kind = entry["type"]
     if kind == "bool":
-        flag = value in (True, "true", "True", 1)
-        # pyOpenMS 3.6 keeps flags as booleans; older Params as "true"/"false"
-        return flag if isinstance(entry["value"], bool) and not entry["choices"] else ("true" if flag else "false")
+        return "true" if value in (True, "true", "True", 1) else "false"
     if kind == "int":
         return int(value)
     if kind == "float":
