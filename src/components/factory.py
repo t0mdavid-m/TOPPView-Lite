@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 import polars as pl
-from openms_insight import Table, LinePlot, Heatmap, SequenceView, SeriesPlot
+from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
+
+# Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
+# MirrorPlot needs disjoint identifiers for its two halves.
+MIRROR_BOTTOM_IDENTIFIER = "mirror_identification"
 
 # openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
 # SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
@@ -532,3 +536,41 @@ def reconstruct_id_components(
         "sequence_view": sequence_view,
         "annotated_spectrum_plot": annotated_spectrum_plot,
     }
+
+
+def create_mirror_plot(
+    mirror_parquet: Path,
+    cache_path: str,
+    file_id: str = "",
+    regenerate_cache: bool = False,
+) -> MirrorPlot:
+    """Mirror plot: experimental spectrum (top) against the theoretical b/y ions (bottom).
+
+    Both halves are keyed by the selected identification: the top half through
+    ``identification``, the bottom through ``MIRROR_BOTTOM_IDENTIFIER``, which the
+    viewer sets to the same id before rendering.
+    """
+    prefix = f"{file_id}_" if file_id else ""
+    return MirrorPlot(
+        cache_id=f"{prefix}mirror_plot",
+        data_path=str(mirror_parquet),
+        cache_path=cache_path,
+        regenerate_cache=regenerate_cache,
+        filters_top={"identification": "mirror_top_id"},
+        filter_defaults_top={"identification": -2},
+        filters_bottom={MIRROR_BOTTOM_IDENTIFIER: "mirror_bottom_id"},
+        filter_defaults_bottom={MIRROR_BOTTOM_IDENTIFIER: -2},
+        x_column="mz",
+        y_column="intensity",
+        highlight_column="matched",
+        annotation_column="label",
+        title_top="Experimental",
+        title_bottom="Theoretical (b/y ions)",
+        x_label="m/z",
+        y_label="Intensity",
+        styling={
+            "unhighlightedColor": "#AAAAAA",
+            "highlightColor": "#E74C3C",
+            "selectedColor": "#F3A712",
+        },
+    )

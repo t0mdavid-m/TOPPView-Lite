@@ -8,7 +8,7 @@ Layout:
 - TIC / BPC chromatogram (click selects the MS1 spectrum)
 - Heatmap (peak map)
 - Spectra table (with # IDs column if identifications present) | Peaks table (side by side)
-- Spectrum plot (annotated if identification selected)
+- Spectrum plot (annotated, or mirrored against the theoretical b/y ions, if identification selected)
 - Identifications table (if identifications present)
 - SequenceView (if identification selected)
 """
@@ -37,6 +37,7 @@ from src.preprocessing.identification import (
     load_search_params,
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
+from src.export import export_table_selection, filtered_output_path, peak_window
 from src.preprocessing.features import (
     extract_featurexml_to_parquet,
     feature_cache_is_valid,
@@ -51,7 +52,10 @@ from src.components.factory import (
     create_id_components,
     reconstruct_ms_components,
     reconstruct_id_components,
+    create_mirror_plot,
+    MIRROR_BOTTOM_IDENTIFIER,
 )
+from src.preprocessing.mirror import ensure_mirror_input
 
 
 # Page setup
@@ -307,13 +311,61 @@ with col2:
 # =============================================================================
 
 if has_ids and id_components:
-    # Annotated spectrum plot (linked to SequenceView)
-    id_components["annotated_spectrum_plot"](
-        key=f"{file_key}_spectrum_plot",
-        state_manager=state_manager,
-        height=400,
-        sequence_view_key=f"{file_key}_sequence_view"
+    spectrum_mode = st.segmented_control(
+        "Spectrum view",
+        ["Annotated", "Mirror vs. theoretical"],
+        default="Annotated",
+        key="viewer_spectrum_mode",
+        label_visibility="collapsed",
     )
+
+    if spectrum_mode == "Mirror vs. theoretical":
+        mirror_key = f"viewer_mirror_{file_key}"
+        mirror_paths, rebuilt = ensure_mirror_input(paths, cached["id_paths"], search_params)
+        if rebuilt or mirror_key not in st.session_state:
+            with st.spinner("Generating theoretical spectra..."):
+                st.session_state[mirror_key] = create_mirror_plot(
+                    mirror_paths["mirror"], cache_path, file_id, regenerate_cache=rebuilt
+                )
+
+        # The bottom half follows the selected identification.
+        selected_id = state_manager.get_selection("identification")
+        if state_manager.get_selection(MIRROR_BOTTOM_IDENTIFIER) != selected_id:
+            if selected_id is None:
+                state_manager.clear_selection(MIRROR_BOTTOM_IDENTIFIER)
+            else:
+                state_manager.set_selection(MIRROR_BOTTOM_IDENTIFIER, selected_id)
+
+        if selected_id is None:
+            st.caption("Select an identification below to compare its spectrum with the theoretical b/y ions.")
+        else:
+            match = (
+                pl.scan_parquet(mirror_paths["summary"])
+                .filter(pl.col("id_idx") == selected_id)
+                .collect()
+            )
+            if match.height:
+                row = match.row(0, named=True)
+                st.caption(
+                    f"{row['matched_ions']} of {row['total_ions']} theoretical b/y ions matched "
+                    f"({row['coverage']:.0f} %). Matched peaks are red and labelled."
+                )
+            else:
+                st.caption("This identification is not linked to a spectrum.")
+
+        st.session_state[mirror_key](
+            key=f"{file_key}_mirror_plot",
+            state_manager=state_manager,
+            height=450,
+        )
+    else:
+        # Annotated spectrum plot (linked to SequenceView)
+        id_components["annotated_spectrum_plot"](
+            key=f"{file_key}_spectrum_plot",
+            state_manager=state_manager,
+            height=400,
+            sequence_view_key=f"{file_key}_sequence_view"
+        )
 
     # Render SequenceView first (computes annotations)
     sv_result = id_components["sequence_view"](
@@ -364,3 +416,84 @@ if featurexml_path is not None:
             state_manager.clear_selection("peak")
             state_manager.clear_selection("identification")
             st.rerun()
+
+# =============================================================================
+# Export filtered mzML
+# =============================================================================
+
+
+def _pagination_state(table, state):
+    """A table's own sort and column filter state from the shared selection state."""
+    identifier = getattr(table, "_pagination_identifier", None) or f"{table._cache_id}_page"
+    return state.get(identifier) or {}
+
+
+def _describe_window(window):
+    parts = []
+    for key, label in (("mz", "m/z"), ("int", "intensity")):
+        bounds = window[key]
+        if bounds is None:
+            continue
+        lo, hi = bounds
+        if lo is not None and hi is not None:
+            parts.append(f"{label} {lo:g} to {hi:g}")
+        elif lo is not None:
+            parts.append(f"{label} ≥ {lo:g}")
+        else:
+            parts.append(f"{label} ≤ {hi:g}")
+    return ", ".join(parts)
+
+
+@st.fragment
+def export_section():
+    """Write a copy of the mzML holding what the Spectra and Peak List tables show."""
+    with st.expander("Export filtered mzML"):
+        spectra_table = (
+            id_components["spectra_table_with_ids"]
+            if has_ids and id_components
+            else ms_components["spectra_table"]
+        )
+        peaks_table = ms_components["peaks_table"]
+        state = state_manager.get_state_for_vue()
+
+        metadata = pl.read_parquet(paths["metadata"], columns=["scan_id", "retention_time", "ms_level"])
+        scan_ids = spectra_table.export_data(state)["scan_id"].to_list()
+        peak_filters = _pagination_state(peaks_table, state).get("column_filters", [])
+        window = peak_window(peak_filters)
+
+        summary = f"{len(scan_ids):,} of {metadata.height:,} spectra"
+        if len(scan_ids) < metadata.height:
+            summary += " (the rows of the Spectra table)"
+        described = _describe_window(window)
+        summary += f", peaks with {described} (the Peak List filters)." if described else ", all peaks."
+        st.markdown(f"**Exports** {summary}")
+        st.caption(
+            "Filter the Spectra table (RT, MS level, precursor m/z, ...) and the m/z and "
+            "intensity columns of the Peak List to change what is exported."
+        )
+
+        out_path = filtered_output_path(st.session_state.workspace, selected_file)
+        result_key = f"export_result_{file_key}"
+        if st.button("Create filtered mzML", disabled=not scan_ids):
+            with st.spinner("Filtering..."):
+                try:
+                    backend = export_table_selection(
+                        selected_file, out_path, metadata, scan_ids, peak_filters
+                    )
+                    st.session_state[result_key] = {"ok": True, "backend": backend}
+                except (ValueError, RuntimeError) as err:
+                    st.session_state[result_key] = {"ok": False, "error": str(err)}
+
+        result = st.session_state.get(result_key)
+        if result and not result["ok"]:
+            st.error(result["error"])
+        elif result and out_path.exists():
+            size_mb = out_path.stat().st_size / 1e6
+            st.caption(f"{out_path.name}: {size_mb:.1f} MB, written with {result['backend']}.")
+            with open(out_path, "rb") as fh:
+                st.download_button(
+                    "Download filtered mzML", fh, file_name=out_path.name, mime="application/xml"
+                )
+
+
+export_section()
