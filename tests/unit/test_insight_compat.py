@@ -1,11 +1,10 @@
-"""Compatibility shims for the installed openms-insight release."""
+"""The installed openms-insight release renders every component the viewer uses."""
 
 import polars as pl
 
 
 def test_sequenceview_payload_cache_key(tmp_path):
-    """openms-insight 0.4.0 needs _get_render_key on SequenceView to render it."""
-    import src.components.factory  # noqa: F401  (applies the shim)
+    """A SequenceView, which has no render key of its own, gets a payload cache key."""
     from openms_insight import SequenceView
     from openms_insight.rendering.bridge import _payload_cache_key
 
