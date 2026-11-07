@@ -466,7 +466,7 @@ def render_resource_utilization():
       Redis and no queue, so the psutil panel is the only content there is.
       Gating it on `online_deployment` left the expander empty.
     """
-    with st.expander("📊 **Resource Utilization**"):
+    with st.expander("**Resource Utilization**", icon=":material/monitoring:"):
         _resource_panels()
 
 
@@ -577,6 +577,49 @@ def save_params(params: dict[str, Any]) -> None:
     return params
 
 
+THEME_CSS = Path(__file__).with_name("theme.css")
+_DARK_MEDIA = "@media (prefers-color-scheme: dark)"
+
+
+def theme_css(css: str, dark: bool) -> str:
+    """Resolve the dark-scheme blocks of a style sheet for the active theme.
+
+    The style sheet writes its dark variants as
+    ``@media (prefers-color-scheme: dark) { ... }``. That media query follows
+    the operating system, but users can pick the other theme in the app menu,
+    so page_setup() resolves the blocks for the theme Streamlit reports: kept
+    (unwrapped) for the dark theme, removed for the light one.
+    """
+    out, i = [], 0
+    while True:
+        start = css.find(_DARK_MEDIA, i)
+        if start < 0:
+            out.append(css[i:])
+            return "".join(out)
+        out.append(css[i:start])
+        open_brace = css.index("{", start)
+        depth, j = 1, open_brace + 1
+        while depth:
+            depth += {"{": 1, "}": -1}.get(css[j], 0)
+            j += 1
+        if dark:
+            out.append(css[open_brace + 1 : j - 1])
+        i = j
+
+
+def apply_theme_css() -> None:
+    """Add the layout part of the OpenMS theme (src/common/theme.css) to the page."""
+    try:
+        dark = st.context.theme.type == "dark"
+    except Exception:
+        dark = False
+    try:
+        css = THEME_CSS.read_text(encoding="utf-8")
+    except OSError:
+        return
+    st.html(f"<style>{theme_css(css, dark)}</style>")
+
+
 def page_setup(page: str = "") -> dict[str, Any]:
     """
     Set up the Streamlit page configuration and determine the workspace for the current session.
@@ -615,6 +658,8 @@ def page_setup(page: str = "") -> dict[str, Any]:
         """,
         unsafe_allow_html=True,
     )
+
+    apply_theme_css()
 
     branding = get_branding()
     st.logo(
@@ -807,6 +852,15 @@ def page_setup(page: str = "") -> dict[str, Any]:
     # Render the sidebar
     params = render_sidebar(page)
 
+    # Image downloads of OpenMS-Insight components follow the sidebar's
+    # "image export format", like show_fig() does for plain Plotly figures
+    try:
+        from openms_insight import set_image_format
+    except ImportError:  # not installed, or a release without the setting
+        pass
+    else:
+        set_image_format(st.session_state.get("image-format", "svg"))
+
     captcha_control(privacy_policy_url=get_legal_links()["privacy"])
 
     # If run in hosted mode, show captcha as long as it has not been solved
@@ -859,7 +913,7 @@ def render_sidebar(page: str = "") -> None:
             # Online: show current workspace name in info text and option to change to other existing workspace
             # Skip workspace switcher for shared workspaces (cross-app integration)
             if st.session_state.location == "local" and st.session_state.get("workspace_source") != "shared":
-                with st.expander("🖥️ **Workspaces**"):
+                with st.expander("**Workspaces**", icon=":material/folder_open:"):
                     # Define callback function to change workspace
                     def change_workspace():
                         # A page switch while a page is still loading can replay
@@ -917,7 +971,7 @@ def render_sidebar(page: str = "") -> None:
             if st.session_state.location == "online":
                 available_demos = get_available_demo_workspaces()
                 if available_demos:
-                    with st.expander("🎮 **Demo Data**"):
+                    with st.expander("**Demo Data**", icon=":material/science:"):
                         st.caption("Load example data to explore the app")
                         selected_demo = st.selectbox(
                             "Select demo dataset",
@@ -953,7 +1007,7 @@ def render_sidebar(page: str = "") -> None:
                 # Save as Demo section (online mode only; hidden when admin
                 # password is not configured — the feature is then disabled).
                 if is_admin_configured():
-                    with st.expander("💾 **Save as Demo**"):
+                    with st.expander("**Save as Demo**", icon=":material/save:"):
                         st.caption("Save current workspace as a demo for others to use")
 
                         demo_name_input = st.text_input(
@@ -1016,12 +1070,21 @@ def render_sidebar(page: str = "") -> None:
                                     st.rerun()
 
         # All pages have settings, workflow indicator and logo
-        with st.expander("⚙️ **Settings**"):
-            img_formats = ["svg", "png", "jpeg", "webp"]
+        with st.expander("**Settings**", icon=":material/tune:"):
+            # The formats OpenMS-Insight can export, so the list never offers
+            # one its components cannot produce
+            try:
+                from openms_insight import IMAGE_FORMATS
+            except ImportError:  # not installed, or a release without the list
+                IMAGE_FORMATS = ("svg", "png", "jpeg", "webp")
+            img_formats = list(IMAGE_FORMATS)
+            if st.session_state.get("image-format") not in img_formats:
+                st.session_state.pop("image-format", None)
+            saved = params.get("image-format", "svg")
             st.selectbox(
                 "image export format",
                 img_formats,
-                img_formats.index(params["image-format"]),
+                img_formats.index(saved) if saved in img_formats else 0,
                 key="image-format",
             )
             st.markdown("## Spectrum Plotting")
@@ -1060,6 +1123,9 @@ def render_sidebar(page: str = "") -> None:
                 f'<div class="version-box">{app_name}<br>Version: {version_info}</div>',
                 unsafe_allow_html=True,
             )
+            from src.common.about import render_about_button
+
+            render_about_button()
 
         # Legal links (Impressum, Privacy Policy, Terms of Use), shown on every
         # page. URLs are configurable via "legal_links" in settings.json.

@@ -10,6 +10,7 @@ from typing import Dict, Optional, Any
 
 import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
+from src.common.plot_style import spectrum_styling
 
 # Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
 # MirrorPlot needs disjoint identifiers for its two halves.
@@ -163,10 +164,7 @@ def create_ms_components(
         title="Mass Spectrum",
         x_label="m/z",
         y_label="Intensity",
-        styling={
-            "unhighlightedColor": "#4A90D9",
-            "selectedColor": "#F3A712",
-        },
+        styling=spectrum_styling(),
     )
 
     # Heatmap - data_path triggers subprocess preprocessing for memory efficiency
@@ -344,11 +342,7 @@ def create_id_components(
         cache_id=f"{prefix}annotated_spectrum",
         cache_path=cache_path,
         title="Annotated Spectrum",
-        styling={
-            "unhighlightedColor": "#CCCCCC",
-            "highlightColor": "#E74C3C",
-            "selectedColor": "#F3A712",
-        },
+        styling=spectrum_styling(),
     )
 
     return {
@@ -642,9 +636,5 @@ def create_mirror_plot(
         title_bottom="Theoretical (b/y ions)",
         x_label="m/z",
         y_label="Intensity",
-        styling={
-            "unhighlightedColor": "#AAAAAA",
-            "highlightColor": "#E74C3C",
-            "selectedColor": "#F3A712",
-        },
+        styling=spectrum_styling(),
     )
