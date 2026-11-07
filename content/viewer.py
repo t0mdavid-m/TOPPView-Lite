@@ -23,6 +23,7 @@ from src.preprocessing import (
     raw_cache_is_valid,
     component_cache_is_valid,
     load_im_info,
+    ensure_im_inputs,
     preprocess_file,
 )
 from src.preprocessing.identification import (
@@ -84,6 +85,26 @@ if st.session_state.get("workspace_source") == "shared":
         # Rerun to ensure clean component state after processing
         st.rerun()
 
+# Files processed by an earlier version are processed again (once per session,
+# so a file that fails to process does not rerun the page forever)
+reprocessed = st.session_state.setdefault("viewer_reprocessed", set())
+outdated_files = []
+for mzml_file in sorted(mzML_dir.glob("*.mzML")):
+    paths = get_cache_paths(st.session_state.workspace, mzml_file)
+    if (
+        str(mzml_file) not in reprocessed
+        and paths["metadata"].exists()
+        and not (raw_cache_is_valid(mzml_file, paths) and component_cache_is_valid(paths))
+    ):
+        outdated_files.append(mzml_file)
+if outdated_files:
+    for mzml_file in outdated_files:
+        reprocessed.add(str(mzml_file))
+        preprocess_file(mzml_file)
+    clear_component_cache()
+    st.session_state.pop("viewer_current_file", None)
+    st.rerun()
+
 # Find preprocessed files
 preprocessed_files = []
 for mzml_file in sorted(mzML_dir.glob("*.mzML")):
@@ -119,6 +140,7 @@ def load_context(selected_file: Path, index: int) -> ViewerContext:
     if file_changed:
         StateManager(session_key=state_session_key(index)).clear()
         clear_component_cache()
+        st.session_state.pop(f"viewer_im_components_{selected_file.stem}", None)
         st.session_state[current_file_key] = selected_file.name
 
     paths = get_cache_paths(st.session_state.workspace, selected_file)
@@ -177,6 +199,7 @@ def load_context(selected_file: Path, index: int) -> ViewerContext:
         id_paths=cached["id_paths"],
         search_params=search_params,
         featurexml_path=find_matching_featurexml(selected_file, st.session_state.workspace),
+        im_inputs_mtime=ensure_im_inputs(paths, im_info),
         local=st.session_state.location == "local",
         index=index,
     )
@@ -233,9 +256,10 @@ shown = render_experiments(
 
 # Drop the components of files no experiment shows any more
 shown_ids = {Path(name).stem for name in shown if name}
-for key in [k for k in st.session_state if k.startswith("viewer_components_")]:
-    if key[len("viewer_components_"):] not in shown_ids:
-        del st.session_state[key]
+for prefix in ("viewer_components_", "viewer_im_components_"):
+    for key in [k for k in st.session_state if k.startswith(prefix)]:
+        if key[len(prefix):] not in shown_ids:
+            del st.session_state[key]
 
 # =============================================================================
 # Sidebar Info (the first experiment)
