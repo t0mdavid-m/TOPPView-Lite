@@ -17,10 +17,13 @@ import streamlit as st
 from openms_insight import StateManager
 
 from src.components.factory import (
+    CHROMATOGRAM_GROUP_IDENTIFIER,
     MIRROR_BOTTOM_IDENTIFIER,
+    STORED_CHROMATOGRAM_IDENTIFIER,
     create_chromatogram_components,
     create_feature_table,
     create_mirror_plot,
+    create_stored_chromatogram_components,
 )
 from src.components.tool_panel import console_panel, operation_panel
 from src.export import export_table_selection, filtered_output_path, peak_window
@@ -32,27 +35,39 @@ from src.preprocessing.features import (
     get_feature_cache_paths,
 )
 from src.preprocessing.mirror import ensure_mirror_input
+from src.preprocessing.stored_chromatograms import (
+    ensure_stored_chromatograms,
+    stored_chromatogram_paths,
+)
 
-# name -> label, group, and when the component is offered ("always", "ids",
-# "im", "features"). The names are stored in saved layouts: do not rename.
+# name -> label, group, and when the component is offered ("always", "spectra",
+# "chromatograms", "ids", "im", "features"). The names are stored in saved
+# layouts: do not rename.
 CATALOG: List[Dict[str, Any]] = [
-    {"name": "chromatogram", "label": "TIC / BPC", "group": "Plots", "needs": "always"},
-    {"name": "peak_map", "label": "Peak map", "group": "Plots", "needs": "always"},
-    {"name": "spectrum", "label": "Spectrum", "group": "Plots", "needs": "always"},
-    {"name": "spectra_table", "label": "Spectra table", "group": "Tables", "needs": "always"},
-    {"name": "peak_list", "label": "Peak list", "group": "Tables", "needs": "always"},
+    {"name": "chromatogram", "label": "TIC / BPC", "group": "Plots", "needs": "spectra"},
+    {
+        "name": "stored_chromatograms",
+        "label": "Stored chromatograms",
+        "group": "Plots",
+        "needs": "chromatograms",
+    },
+    {"name": "peak_map", "label": "Peak map", "group": "Plots", "needs": "spectra"},
+    {"name": "spectrum", "label": "Spectrum", "group": "Plots", "needs": "spectra"},
+    {"name": "spectra_table", "label": "Spectra table", "group": "Tables", "needs": "spectra"},
+    {"name": "peak_list", "label": "Peak list", "group": "Tables", "needs": "spectra"},
     {"name": "im_table", "label": "Ion mobility table", "group": "Tables", "needs": "im"},
     {"name": "id_table", "label": "Identifications", "group": "Identifications", "needs": "ids"},
     {"name": "sequence_view", "label": "Sequence view", "group": "Identifications", "needs": "ids"},
     {"name": "features", "label": "Features table", "group": "Features", "needs": "features"},
     {"name": "tools", "label": "Tools", "group": "Tools", "needs": "always"},
-    {"name": "export", "label": "Export filtered mzML", "group": "Tools", "needs": "always"},
+    {"name": "export", "label": "Export filtered mzML", "group": "Tools", "needs": "spectra"},
 ]
 
 DEFAULT_LAYOUT: List[List[str]] = [
     ["tools"],
     ["im_table"],
     ["chromatogram"],
+    ["stored_chromatograms"],
     ["peak_map"],
     ["spectra_table", "peak_list"],
     ["spectrum"],
@@ -63,6 +78,7 @@ DEFAULT_LAYOUT: List[List[str]] = [
 ]
 
 _NEEDS_NOTE = {
+    "chromatograms": "when the mzML stores chromatograms",
     "ids": "when an idXML matches the mzML",
     "im": "for ion mobility data",
     "features": "when a featureXML matches the mzML",
@@ -104,6 +120,9 @@ class ViewerContext:
     local: bool = False
     # Which experiment of the layout this is; each has its own widget keys
     index: int = 0
+    # Spectra and stored chromatograms in the file (an SRM file has no spectra)
+    num_spectra: int = 1
+    num_chromatograms: int = 0
 
     @property
     def file_key(self) -> str:
@@ -126,6 +145,8 @@ def available_catalog(ctx: ViewerContext) -> List[Dict[str, Any]]:
     """The catalog entries this file can show."""
     have = {
         "always": True,
+        "spectra": ctx.num_spectra > 0,
+        "chromatograms": ctx.num_chromatograms > 0,
         "ids": ctx.has_ids,
         "im": ctx.has_im,
         "features": ctx.featurexml_path is not None,
@@ -151,6 +172,42 @@ def chromatogram(ctx: ViewerContext) -> None:
         label_visibility="collapsed",
     ) or "tic"
     plots[kind](key=f"{ctx.file_key}_{kind}_plot", state_manager=ctx.state_manager, height=250)
+
+
+def stored_chromatograms(ctx: ViewerContext) -> None:
+    """The chromatograms stored in the mzML: a table, and a plot of the clicked
+    one or of every chromatogram of its precursor."""
+    count, _ = ensure_stored_chromatograms(ctx.selected_file, ctx.paths)
+    files = stored_chromatogram_paths(ctx.paths)
+    components = create_stored_chromatogram_components(
+        str(files["index"]), str(files["points"]), ctx.cache_path, ctx.file_id
+    )
+    shown = st.segmented_control(
+        "Chromatograms shown",
+        options=["selected", "group"],
+        format_func={"selected": "Selected", "group": "All of its precursor"}.get,
+        default="selected",
+        key=ctx.key("viewer_stored_chromatograms_shown"),
+        label_visibility="collapsed",
+    ) or "selected"
+    selected = ctx.state_manager.get_selection(STORED_CHROMATOGRAM_IDENTIFIER)
+    if selected is None:
+        st.caption(f"{count:,} chromatograms in the file. Click one in the table to draw it.")
+    # A key per chromatogram (or group): another one opens on its full RT
+    # range, not on the zoom of the last one
+    drawn = selected if shown == "selected" else ctx.state_manager.get_selection(
+        CHROMATOGRAM_GROUP_IDENTIFIER
+    )
+    components[shown](
+        key=f"{ctx.file_key}_stored_chromatogram_{shown}_{drawn}",
+        state_manager=ctx.state_manager,
+        height=300,
+    )
+    components["table"](
+        key=f"{ctx.file_key}_stored_chromatogram_table",
+        state_manager=ctx.state_manager,
+        height=300,
+    )
 
 
 def peak_map(ctx: ViewerContext) -> None:
@@ -404,6 +461,7 @@ def export(ctx: ViewerContext) -> None:
 
 PANELS: Dict[str, Callable[[ViewerContext], None]] = {
     "chromatogram": chromatogram,
+    "stored_chromatograms": stored_chromatograms,
     "peak_map": peak_map,
     "spectrum": spectrum,
     "spectra_table": spectra_table,
