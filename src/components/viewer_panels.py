@@ -20,6 +20,7 @@ from src.components.factory import (
     MIRROR_BOTTOM_IDENTIFIER,
     create_chromatogram_components,
     create_feature_table,
+    create_im_components,
     create_mirror_plot,
 )
 from src.components.tool_panel import console_panel, operation_panel
@@ -42,6 +43,8 @@ CATALOG: List[Dict[str, Any]] = [
     {"name": "spectra_table", "label": "Spectra table", "group": "Tables", "needs": "always"},
     {"name": "peak_list", "label": "Peak list", "group": "Tables", "needs": "always"},
     {"name": "im_table", "label": "Ion mobility table", "group": "Tables", "needs": "im"},
+    {"name": "im_map", "label": "Ion mobility map", "group": "Ion mobility", "needs": "peak_im"},
+    {"name": "mobilogram", "label": "Mobilogram", "group": "Ion mobility", "needs": "peak_im"},
     {"name": "id_table", "label": "Identifications", "group": "Identifications", "needs": "ids"},
     {"name": "sequence_view", "label": "Sequence view", "group": "Identifications", "needs": "ids"},
     {"name": "features", "label": "Features table", "group": "Features", "needs": "features"},
@@ -54,6 +57,7 @@ DEFAULT_LAYOUT: List[List[str]] = [
     ["im_table"],
     ["chromatogram"],
     ["peak_map"],
+    ["im_map", "mobilogram"],
     ["spectra_table", "peak_list"],
     ["spectrum"],
     ["sequence_view"],
@@ -65,6 +69,7 @@ DEFAULT_LAYOUT: List[List[str]] = [
 _NEEDS_NOTE = {
     "ids": "when an idXML matches the mzML",
     "im": "for ion mobility data",
+    "peak_im": "for ion mobility per peak",
     "features": "when a featureXML matches the mzML",
 }
 
@@ -104,6 +109,8 @@ class ViewerContext:
     local: bool = False
     # Which experiment of the layout this is; each has its own widget keys
     index: int = 0
+    # Modification time of the ion mobility map inputs (None: no ion mobility per peak)
+    im_inputs_mtime: Optional[float] = None
 
     @property
     def file_key(self) -> str:
@@ -121,6 +128,10 @@ class ViewerContext:
     def has_im(self) -> bool:
         return self.ms_components.get("im_table") is not None
 
+    @property
+    def has_peak_im(self) -> bool:
+        return self.im_inputs_mtime is not None
+
 
 def available_catalog(ctx: ViewerContext) -> List[Dict[str, Any]]:
     """The catalog entries this file can show."""
@@ -128,6 +139,7 @@ def available_catalog(ctx: ViewerContext) -> List[Dict[str, Any]]:
         "always": True,
         "ids": ctx.has_ids,
         "im": ctx.has_im,
+        "peak_im": ctx.has_peak_im,
         "features": ctx.featurexml_path is not None,
     }
     return [e for e in CATALOG if have[e["needs"]]]
@@ -178,6 +190,35 @@ def peak_list(ctx: ViewerContext) -> None:
 def im_table(ctx: ViewerContext) -> None:
     ctx.ms_components["im_table"](
         key=f"{ctx.file_key}_im_table", state_manager=ctx.state_manager, height=400
+    )
+
+
+def _im_components(ctx: ViewerContext) -> Dict[str, Any]:
+    """The ion mobility map and mobilogram of this file, built once per input version."""
+    key = f"viewer_im_components_{ctx.file_id}"
+    cached = st.session_state.get(key)
+    if cached is None or cached["mtime"] != ctx.im_inputs_mtime:
+        cached = {
+            "mtime": ctx.im_inputs_mtime,
+            "components": create_im_components(
+                ctx.paths, ctx.im_info, ctx.im_inputs_mtime, ctx.file_id
+            ),
+        }
+        st.session_state[key] = cached
+    return cached["components"]
+
+
+def im_map(ctx: ViewerContext) -> None:
+    """m/z against ion mobility of the selected spectrum's peaks."""
+    _im_components(ctx)["im_map"](
+        key=f"{ctx.file_key}_im_map", state_manager=ctx.state_manager, height=400
+    )
+
+
+def mobilogram(ctx: ViewerContext) -> None:
+    """Summed intensity of the selected spectrum along ion mobility."""
+    _im_components(ctx)["mobilogram"](
+        key=f"{ctx.file_key}_mobilogram", state_manager=ctx.state_manager, height=400
     )
 
 
@@ -409,6 +450,8 @@ PANELS: Dict[str, Callable[[ViewerContext], None]] = {
     "spectra_table": spectra_table,
     "peak_list": peak_list,
     "im_table": im_table,
+    "im_map": im_map,
+    "mobilogram": mobilogram,
     "id_table": id_table,
     "sequence_view": sequence_view,
     "features": features,

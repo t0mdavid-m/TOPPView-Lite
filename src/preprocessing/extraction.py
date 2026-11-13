@@ -5,12 +5,28 @@ into parquet files for efficient subsequent access.
 """
 
 import json
+import shutil
 from pathlib import Path
 from typing import Optional, Callable
 
 import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 from pyopenms import MSExperiment, MzMLFile
+
+# Bumped when im_info.json or the ion mobility columns change meaning, so
+# older caches are extracted again.
+IM_INFO_VERSION = 2
+
+# Names of float data arrays holding one ion mobility value per peak
+# (matched as substrings of the lower-cased array name).
+IM_ARRAY_NAMES = (
+    "ion mobility",
+    "inverse reduced ion mobility",
+    "drift time",
+    "ion mobility drift time",
+    "mean ion mobility array",
+)
 
 
 def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
@@ -48,6 +64,10 @@ def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
         "heatmap_input": components_dir / "heatmap_input.parquet",
         "im_table": components_dir / "im_table.parquet",
         "chromatogram": components_dir / "chromatogram.parquet",
+        # Per-peak ion mobility (TIMS / drift time files only)
+        "im_peaks": components_dir / "im_peaks.parquet",
+        "im_peaks_binned": components_dir / "im_peaks_binned.parquet",
+        "mobilogram": components_dir / "mobilogram.parquet",
         # Component cache directory (for openms_insight caches)
         "component_cache": components_dir / "component_cache",
     }
@@ -63,27 +83,51 @@ def raw_cache_is_valid(mzml_path: Path, paths: dict) -> bool:
         return False
 
     mzml_mtime = mzml_path.stat().st_mtime
-    return (
+    fresh = (
         metadata_pq.stat().st_mtime > mzml_mtime
         and peaks_pq.stat().st_mtime > mzml_mtime
         and im_info.stat().st_mtime > mzml_mtime
     )
+    if not fresh:
+        return False
+    # Caches written before the current ion mobility handling (FAIMS only
+    # with its CV unit, per-peak ion mobility values) are extracted again.
+    try:
+        with open(im_info) as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if info.get("version") != IM_INFO_VERSION:
+        return False
+    if info.get("type") == "tims":
+        return "ion_mobility" in pq.read_schema(peaks_pq).names
+    return True
+
+
+def _peak_im_array(spectrum, n_peaks: int) -> Optional[np.ndarray]:
+    """Return the per-peak ion mobility values of a spectrum, if it has them."""
+    for fda in spectrum.getFloatDataArrays():
+        name = fda.getName().lower() if fda.getName() else ""
+        if any(im_name in name for im_name in IM_ARRAY_NAMES):
+            values = np.asarray(fda.get_data(), dtype=np.float32)
+            if len(values) == n_peaks:
+                return values
+    return None
 
 
 def get_faims_cv_from_spectrum(spectrum) -> Optional[float]:
     """Extract FAIMS compensation voltage from spectrum.
 
-    Uses getDriftTime() which pyOpenMS uses for FAIMS CV values.
-    The drift time unit indicates FAIMS (unit 3 = volt).
+    pyOpenMS stores the CV as the spectrum's drift time, with the drift time
+    unit FAIMS_COMPENSATION_VOLTAGE (3). An unset drift time is -1 with unit
+    NONE (0); a drift time in ms or 1/K0 is not a CV.
     """
-    drift_time = spectrum.getDriftTime()
-    if drift_time != 0.0 or spectrum.getDriftTimeUnit() == 3:
-        return float(drift_time)
+    if int(spectrum.getDriftTimeUnit()) == 3:
+        return float(spectrum.getDriftTime())
 
     # Fallback: check meta values (for other data formats)
     cv_names = [
         "FAIMS compensation voltage",
-        "ion mobility drift time",
         "MS:1001581",
     ]
     for name in cv_names:
@@ -118,13 +162,7 @@ def detect_ion_mobility_type(exp: MSExperiment) -> tuple[str, str, list]:
         return 'faims', 'V', cv_values
 
     # Check for TIMS ion mobility in FloatDataArrays
-    im_array_names = [
-        "ion mobility",
-        "inverse reduced ion mobility",
-        "drift time",
-        "ion mobility drift time",
-        "mean ion mobility array",
-    ]
+    im_array_names = IM_ARRAY_NAMES
 
     for spectrum in exp:
         if spectrum.getMSLevel() != 1:
@@ -191,6 +229,8 @@ def extract_mzml_to_parquet(
     mzs = np.empty(total_peaks, dtype=np.float32)
     intensities = np.empty(total_peaks, dtype=np.float32)
     peak_im_ids = np.empty(total_peaks, dtype=np.int32)
+    # TIMS / drift time: one ion mobility value per peak (NaN when a spectrum has none)
+    peak_mobilities = np.full(total_peaks, np.nan, dtype=np.float32) if im_type == 'tims' else None
 
     # Pre-allocate arrays for metadata
     meta_scan_ids = np.empty(num_spectra, dtype=np.int32)
@@ -240,6 +280,10 @@ def extract_mzml_to_parquet(
             mzs[peak_idx:end_idx] = mz_array
             intensities[peak_idx:end_idx] = intensity_array
             peak_im_ids[peak_idx:end_idx] = im_id
+            if peak_mobilities is not None:
+                mobility = _peak_im_array(spectrum, n_peaks)
+                if mobility is not None:
+                    peak_mobilities[peak_idx:end_idx] = mobility
             peak_idx = end_idx
 
     # Create directories and write files
@@ -270,6 +314,10 @@ def extract_mzml_to_parquet(
             "intensity": intensities[:peak_idx],
             "im_id": peak_im_ids[:peak_idx],
         })
+        if peak_mobilities is not None:
+            peaks_df = peaks_df.with_columns(
+                pl.Series("ion_mobility", peak_mobilities[:peak_idx])
+            )
         peaks_df.write_parquet(paths["peaks"])
     else:
         pl.DataFrame({
@@ -279,10 +327,12 @@ def extract_mzml_to_parquet(
             "mass": pl.Series([], dtype=pl.Float32),
             "intensity": pl.Series([], dtype=pl.Float32),
             "im_id": pl.Series([], dtype=pl.Int32),
+            **({"ion_mobility": pl.Series([], dtype=pl.Float32)} if im_type == 'tims' else {}),
         }).write_parquet(paths["peaks"])
 
     # Write ion mobility info
     im_info = {
+        "version": IM_INFO_VERSION,
         "type": im_type,
         "unit": im_unit,
         "unique_values": unique_cvs if im_type == 'faims' else [],
@@ -290,6 +340,10 @@ def extract_mzml_to_parquet(
     }
     with open(paths["im_info"], "w") as f:
         json.dump(im_info, f, indent=2)
+
+    # Insight caches reuse a cache with the same id and configuration even when
+    # its data changed, so drop the ones built from the previous extraction.
+    shutil.rmtree(paths["component_cache"], ignore_errors=True)
 
     if status_callback:
         if im_type != 'none':

@@ -41,3 +41,19 @@ def test_each_experiment_has_its_own_keys():
     assert ctx(1).file_key == "run_e1" and ctx(1).key("viewer_tools") == "viewer_tools_e1"
     # Two experiments of a five-file layout validate
     assert validate_layout([DEFAULT_LAYOUT, DEFAULT_LAYOUT], editor_catalog()) == ""
+
+
+def test_ion_mobility_map_needs_ion_mobility_per_peak():
+    from pathlib import Path
+    from src.components.viewer_panels import ViewerContext, available_catalog
+
+    def names(mtime):
+        ctx = ViewerContext(
+            workspace=Path("."), selected_file=Path("run.mzML"), paths={}, im_info={},
+            file_id="run", cache_path="", state_manager=None, ms_components={},
+            im_inputs_mtime=mtime,
+        )
+        return {c["name"] for c in available_catalog(ctx)}
+
+    assert not {"im_map", "mobilogram"} & names(None)
+    assert {"im_map", "mobilogram"} <= names(1.0)
