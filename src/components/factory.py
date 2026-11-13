@@ -564,3 +564,92 @@ def create_mirror_plot(
         y_label="Intensity",
         styling=spectrum_styling(),
     )
+
+
+# Identifiers of the stored chromatograms panel: the clicked chromatogram, and
+# the precursor group it belongs to (its transitions)
+STORED_CHROMATOGRAM_IDENTIFIER = "stored_chromatogram"
+CHROMATOGRAM_GROUP_IDENTIFIER = "chromatogram_group"
+
+
+def create_stored_chromatogram_components(
+    index_path: str,
+    points_path: str,
+    cache_path: str,
+    file_id: str = "",
+    regenerate_cache: bool = False,
+) -> Dict[str, Any]:
+    """Table of the chromatograms stored in the mzML and two plots of them.
+
+    A click in the table selects a chromatogram (``stored_chromatogram``) and
+    its precursor group (``chromatogram_group``). ``selected`` draws that
+    chromatogram, ``group`` every chromatogram of its group, one line each
+    (the transitions of one precursor in an SRM/MRM file).
+
+    Returns:
+        Dict with keys ``table``, ``selected`` and ``group``.
+    """
+    prefix = f"{file_id}_" if file_id else ""
+    money = lambda precision: {  # noqa: E731
+        "sorter": "number",
+        "formatter": "money",
+        "formatterParams": {"precision": precision, "symbol": ""},
+    }
+    table = Table(
+        cache_id=f"{prefix}stored_chromatogram_table",
+        data_path=index_path,
+        cache_path=cache_path,
+        regenerate_cache=regenerate_cache,
+        interactivity={
+            STORED_CHROMATOGRAM_IDENTIFIER: "chrom_index",
+            CHROMATOGRAM_GROUP_IDENTIFIER: "group_id",
+        },
+        column_definitions=[
+            {"field": "chrom_index", "title": "#", "sorter": "number", "width": 60},
+            {"field": "native_id", "title": "Native ID", "headerFilter": "input"},
+            {"field": "type", "title": "Type", "width": 90},
+            {"field": "precursor_mz", "title": "Precursor m/z", **money(4)},
+            {"field": "product_mz", "title": "Product m/z", **money(4)},
+            {"field": "peptide", "title": "Peptide", "headerFilter": "input"},
+            {"field": "num_points", "title": "Points", "sorter": "number", "width": 80},
+            {"field": "rt_start", "title": "RT start", **money(2)},
+            {"field": "rt_end", "title": "RT end", **money(2)},
+            {
+                "field": "max_intensity",
+                "title": "Max intensity",
+                "sorter": "number",
+                "formatter": "scientific",
+                "formatterParams": {"precision": 3},
+            },
+            {"field": "group_id", "title": "Group", "sorter": "number"},
+        ],
+        hidden_columns=["rt_start", "rt_end", "group_id"],
+        title="Stored chromatograms",
+        index_field="chrom_index",
+        go_to_fields=["chrom_index", "native_id"],
+        default_row=0,
+        server_side_pagination=True,
+        page_size=100,
+    )
+    plots = {}
+    for kind, identifier, column in (
+        ("selected", STORED_CHROMATOGRAM_IDENTIFIER, "chrom_index"),
+        ("group", CHROMATOGRAM_GROUP_IDENTIFIER, "group_id"),
+    ):
+        plots[kind] = SeriesPlot(
+            cache_id=f"{prefix}stored_chromatogram_{kind}",
+            data_path=points_path,
+            cache_path=cache_path,
+            regenerate_cache=regenerate_cache,
+            filters={identifier: column},
+            x_column="retention_time",
+            y_column="intensity",
+            series_column="native_id",
+            title="Stored chromatogram" if kind == "selected" else "Chromatograms of the precursor",
+            x_label="Retention Time (min)",
+            y_label="Intensity",
+            mode="lines",
+            show_legend=kind == "group",
+            svg_filename="chromatogram",
+        )
+    return {"table": table, **plots}

@@ -33,6 +33,7 @@ from src.preprocessing.identification import (
 )
 from src.preprocessing.component_inputs import create_spectra_table_with_ids
 from src.preprocessing.features import find_matching_featurexml
+from src.preprocessing.stored_chromatograms import ensure_stored_chromatograms
 from src.components.factory import (
     create_ms_components,
     create_id_components,
@@ -179,6 +180,8 @@ def load_context(selected_file: Path, index: int) -> ViewerContext:
         featurexml_path=find_matching_featurexml(selected_file, st.session_state.workspace),
         local=st.session_state.location == "local",
         index=index,
+        num_spectra=pl.scan_parquet(paths["metadata"]).select(pl.len()).collect().item(),
+        num_chromatograms=ensure_stored_chromatograms(selected_file, paths)[0],
     )
 
 
