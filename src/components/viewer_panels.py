@@ -17,7 +17,10 @@ import streamlit as st
 from openms_insight import StateManager
 
 from src.components.factory import (
+    ALL_IDENTIFICATIONS_IDENTIFIER,
+    CHROMATOGRAM_SPECTRUM_IDENTIFIER,
     MIRROR_BOTTOM_IDENTIFIER,
+    create_all_identifications_table,
     create_chromatogram_components,
     create_feature_table,
     create_mirror_plot,
@@ -44,6 +47,12 @@ CATALOG: List[Dict[str, Any]] = [
     {"name": "im_table", "label": "Ion mobility table", "group": "Tables", "needs": "im"},
     {"name": "id_table", "label": "Identifications", "group": "Identifications", "needs": "ids"},
     {"name": "sequence_view", "label": "Sequence view", "group": "Identifications", "needs": "ids"},
+    {
+        "name": "all_identifications",
+        "label": "All identifications",
+        "group": "Identifications",
+        "needs": "ids",
+    },
     {"name": "features", "label": "Features table", "group": "Features", "needs": "features"},
     {"name": "tools", "label": "Tools", "group": "Tools", "needs": "always"},
     {"name": "export", "label": "Export filtered mzML", "group": "Tools", "needs": "always"},
@@ -58,6 +67,7 @@ DEFAULT_LAYOUT: List[List[str]] = [
     ["spectrum"],
     ["sequence_view"],
     ["id_table"],
+    ["all_identifications"],
     ["features"],
     ["export"],
 ]
@@ -141,6 +151,26 @@ def available_catalog(ctx: ViewerContext) -> List[Dict[str, Any]]:
 def chromatogram(ctx: ViewerContext) -> None:
     """TIC or BPC of the MS1 spectra. A click selects that MS1 spectrum."""
     ensure_chromatogram_input(ctx.paths, ctx.im_info)
+    state_manager = ctx.state_manager
+    applied_key = f"viewer_applied_chromatogram_{ctx.file_key}"
+
+    # Mark a spectrum picked elsewhere, when it is an MS1 spectrum of the plot
+    current = state_manager.get_selection("spectrum")
+    if current != st.session_state.get(applied_key):
+        st.session_state[applied_key] = current
+        on_plot = current is not None and (
+            pl.scan_parquet(ctx.paths["chromatogram"])
+            .filter(pl.col("scan_id") == current)
+            .select(pl.len())
+            .collect()
+            .item()
+        )
+        # None, not clear_selection(): a cleared key would be taken from the
+        # plot's stale state again as a new selection
+        state_manager.set_selection(
+            CHROMATOGRAM_SPECTRUM_IDENTIFIER, current if on_plot else None
+        )
+
     plots = create_chromatogram_components(ctx.paths, ctx.im_info, ctx.file_id)
     kind = st.segmented_control(
         "Chromatogram",
@@ -150,7 +180,15 @@ def chromatogram(ctx: ViewerContext) -> None:
         key=ctx.key("viewer_chromatogram_kind"),
         label_visibility="collapsed",
     ) or "tic"
-    plots[kind](key=f"{ctx.file_key}_{kind}_plot", state_manager=ctx.state_manager, height=250)
+    plots[kind](key=f"{ctx.file_key}_{kind}_plot", state_manager=state_manager, height=250)
+
+    # A click on the plot selects that spectrum everywhere
+    picked = state_manager.get_selection(CHROMATOGRAM_SPECTRUM_IDENTIFIER)
+    if picked is not None and picked != st.session_state.get(applied_key):
+        st.session_state[applied_key] = picked
+        state_manager.set_selection("spectrum", int(picked))
+        state_manager.clear_selection("peak")
+        st.rerun()
 
 
 def peak_map(ctx: ViewerContext) -> None:
@@ -255,6 +293,46 @@ def id_table(ctx: ViewerContext) -> None:
     ctx.id_components["id_table"](
         key=f"{ctx.file_key}_id_table", state_manager=ctx.state_manager, height=300
     )
+
+
+def all_identifications(ctx: ViewerContext) -> None:
+    """Every identification of the idXML. A click shows its spectrum and selects it
+    there; an identification selected elsewhere is highlighted here."""
+    state_manager = ctx.state_manager
+    applied_key = f"viewer_applied_overview_{ctx.file_key}"
+
+    # Follow an identification picked in another panel since the last one
+    # applied here
+    current = state_manager.get_selection("identification")
+    if current != st.session_state.get(applied_key):
+        # None, not clear_selection(): see chromatogram()
+        state_manager.set_selection(ALL_IDENTIFICATIONS_IDENTIFIER, current)
+        st.session_state[applied_key] = current
+
+    table = create_all_identifications_table(
+        str(ctx.id_paths["identifications"]), ctx.cache_path, ctx.file_id
+    )
+    st.caption("Click an identification to show its spectrum.")
+    table(key=f"{ctx.file_key}_all_identifications", state_manager=state_manager, height=350)
+
+    # A newly clicked identification selects its spectrum, then itself there
+    picked = state_manager.get_selection(ALL_IDENTIFICATIONS_IDENTIFIER)
+    if picked is None or st.session_state.get(applied_key) == picked:
+        return
+    st.session_state[applied_key] = picked
+    scan = (
+        pl.scan_parquet(ctx.id_paths["identifications"])
+        .filter(pl.col("id_idx") == picked)
+        .select("scan_id")
+        .collect()
+    )
+    if not scan.height or scan["scan_id"][0] <= 0:
+        st.caption("This identification is not linked to a spectrum of the file.")
+        return
+    state_manager.set_selection("spectrum", int(scan["scan_id"][0]))
+    state_manager.set_selection("identification", int(picked))
+    state_manager.clear_selection("peak")
+    st.rerun()
 
 
 def features(ctx: ViewerContext) -> None:
@@ -411,6 +489,7 @@ PANELS: Dict[str, Callable[[ViewerContext], None]] = {
     "im_table": im_table,
     "id_table": id_table,
     "sequence_view": sequence_view,
+    "all_identifications": all_identifications,
     "features": features,
     "tools": tools,
     "export": export,
