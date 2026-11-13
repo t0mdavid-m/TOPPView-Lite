@@ -410,6 +410,12 @@ def create_feature_table(
     )
 
 
+# Identifier of the TIC/BPC plots. They hold the MS1 spectra only, and Insight
+# clears a selection a component cannot show, so with ``spectrum`` they would
+# drop every MS2 spectrum picked elsewhere. The viewer maps it to ``spectrum``.
+CHROMATOGRAM_SPECTRUM_IDENTIFIER = "chromatogram_spectrum"
+
+
 def create_chromatogram_components(
     paths: dict,
     im_info: dict,
@@ -417,8 +423,9 @@ def create_chromatogram_components(
 ) -> Dict[str, Any]:
     """Create the MS1 TIC and BPC line plots.
 
-    Clicking a point selects that MS1 spectrum (``spectrum`` identifier), so
-    the spectra table, peak list and spectrum plot follow. Insight reuses the on-disk cache
+    Clicking a point sets ``chromatogram_spectrum``; the viewer selects that
+    MS1 spectrum (``spectrum``), so the spectra table, peak list and spectrum
+    plot follow. Insight reuses the on-disk cache
     when the configuration is unchanged, so calling this on every rerun is
     cheap.
 
@@ -440,7 +447,7 @@ def create_chromatogram_components(
             data_path=str(paths["chromatogram"]),
             cache_path=cache_path,
             filters={"im_dimension": "im_id"} if use_im_filter else None,
-            interactivity={"spectrum": "scan_id"},
+            interactivity={CHROMATOGRAM_SPECTRUM_IDENTIFIER: "scan_id"},
             x_column="retention_time",
             y_column=column,
             title=title,
@@ -563,4 +570,72 @@ def create_mirror_plot(
         x_label="m/z",
         y_label="Intensity",
         styling=spectrum_styling(),
+    )
+
+
+# Identifier of the table of all identifications. It is its own: an Insight
+# table clears a selection that is not among its rows, so this table cannot
+# hold ``spectrum`` (most spectra have no identification). The viewer maps a
+# click to ``spectrum`` and ``identification``.
+ALL_IDENTIFICATIONS_IDENTIFIER = "identification_overview"
+
+
+def create_all_identifications_table(
+    id_parquet: str,
+    cache_path: str,
+    file_id: str = "",
+) -> Table:
+    """Every identification of the idXML, with its spectrum's scan and RT.
+
+    The table reads the identifications cache the per-spectrum table is
+    built from; Insight reuses its own cache while the configuration is
+    unchanged.
+    """
+    prefix = f"{file_id}_" if file_id else ""
+    money = lambda precision: {  # noqa: E731
+        "sorter": "number",
+        "formatter": "money",
+        "formatterParams": {"precision": precision, "symbol": ""},
+    }
+    data = pl.scan_parquet(id_parquet).select(
+        "id_idx",
+        (pl.col("rt") / 60.0).alias("rt_min"),
+        pl.when(pl.col("scan_id") > 0).then(pl.col("scan_id")).alias("scan_id"),
+        "precursor_mz",
+        "charge",
+        "sequence_display",
+        "score",
+        "protein_accession",
+    )
+    return Table(
+        cache_id=f"{prefix}all_identifications_table",
+        data=data,
+        cache_path=cache_path,
+        interactivity={ALL_IDENTIFICATIONS_IDENTIFIER: "id_idx"},
+        column_definitions=[
+            {"field": "id_idx", "title": "#", "sorter": "number", "width": 60},
+            {"field": "rt_min", "title": "RT (min)", **money(2)},
+            {"field": "scan_id", "title": "Scan", "sorter": "number", "width": 80},
+            {"field": "precursor_mz", "title": "Precursor m/z", **money(4)},
+            {"field": "charge", "title": "z", "sorter": "number", "width": 50},
+            {
+                "field": "sequence_display",
+                "title": "Sequence",
+                "headerFilter": "input",
+                "headerTooltip": True,
+            },
+            {"field": "score", "title": "Score", **money(4)},
+            {
+                "field": "protein_accession",
+                "title": "Protein",
+                "headerFilter": "input",
+                "headerTooltip": True,
+            },
+        ],
+        title="All identifications",
+        index_field="id_idx",
+        go_to_fields=["id_idx", "scan_id"],
+        default_row=-1,
+        server_side_pagination=True,
+        page_size=100,
     )
