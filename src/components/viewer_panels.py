@@ -21,6 +21,14 @@ from src.components.factory import (
     create_chromatogram_components,
     create_feature_table,
     create_mirror_plot,
+    create_peak_map,
+)
+from src.components.peak_map_axes import (
+    DEFAULT_AXES,
+    RT_UNIT_LABELS,
+    axes_suffix,
+    convert_zoom,
+    zoom_identifier as axes_zoom_identifier,
 )
 from src.components.tool_panel import console_panel, operation_panel
 from src.export import export_table_selection, filtered_output_path, peak_window
@@ -154,8 +162,45 @@ def chromatogram(ctx: ViewerContext) -> None:
 
 
 def peak_map(ctx: ViewerContext) -> None:
-    ctx.ms_components["heatmap"](
-        key=f"{ctx.file_key}_heatmap", state_manager=ctx.state_manager, height=400
+    """RT against m/z. RT in minutes or seconds, and the axes can be swapped."""
+    left, right = st.columns([3, 2], vertical_alignment="center")
+    with left:
+        rt_unit = st.segmented_control(
+            "Retention time unit",
+            options=list(RT_UNIT_LABELS),
+            format_func=RT_UNIT_LABELS.get,
+            default=DEFAULT_AXES[0],
+            key=ctx.key("viewer_peak_map_rt_unit"),
+            label_visibility="collapsed",
+        ) or DEFAULT_AXES[0]
+    with right:
+        swapped = st.toggle(
+            "Swap axes",
+            key=ctx.key("viewer_peak_map_swapped"),
+            help="m/z on the horizontal axis, retention time on the vertical one",
+        )
+    axes = (rt_unit, swapped)
+
+    # Keep the region on screen when the axes change: each choice has its own
+    # zoom identifier, given the previous one's zoom converted
+    applied_key = f"viewer_applied_peak_map_axes_{ctx.file_key}"
+    previous = st.session_state.get(applied_key, DEFAULT_AXES)
+    if tuple(previous) != axes:
+        zoom = ctx.state_manager.get_selection(axes_zoom_identifier(*previous))
+        ctx.state_manager.set_selection(
+            axes_zoom_identifier(*axes), convert_zoom(zoom, tuple(previous), axes)
+        )
+    st.session_state[applied_key] = axes
+
+    if axes == DEFAULT_AXES:
+        heatmap = ctx.ms_components["heatmap"]
+    else:
+        with st.spinner("Preparing the peak map for these axes..."):
+            heatmap = create_peak_map(ctx.paths, ctx.im_info, ctx.file_id, rt_unit, swapped)
+    heatmap(
+        key=f"{ctx.file_key}_heatmap{axes_suffix(*axes)}",
+        state_manager=ctx.state_manager,
+        height=400,
     )
 
 

@@ -11,6 +11,7 @@ from typing import Dict, Optional, Any
 import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
 from src.common.plot_style import spectrum_styling
+from src.components.peak_map_axes import axes_suffix, rt_label, zoom_identifier
 
 # Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
 # MirrorPlot needs disjoint identifiers for its two halves.
@@ -195,6 +196,52 @@ def create_ms_components(
         "spectrum_plot": spectrum_plot,
         "heatmap": heatmap,
     }
+
+
+def create_peak_map(
+    paths: dict,
+    im_info: dict,
+    file_id: str = "",
+    rt_unit: str = "min",
+    swapped: bool = False,
+) -> Heatmap:
+    """The peak map with retention time in ``rt_unit`` ("min" or "s"), on y if ``swapped``.
+
+    Each choice other than the default (minutes on x, the heatmap of
+    ``create_ms_components``) has a cache and a zoom identifier of its own; its
+    cache is built the first time it is shown.
+    """
+    use_im_filter = im_info.get("type") != "none" and im_info.get("num_dimensions", 0) > 1
+    prefix = f"{file_id}_" if file_id else ""
+    suffix = axes_suffix(rt_unit, swapped)
+    rt_column = "retention_time"
+    source: Dict[str, Any] = {"data_path": str(paths["heatmap_input"])}
+    if rt_unit == "s":
+        rt_column = "retention_time_s"
+        source = {
+            "data": pl.scan_parquet(paths["heatmap_input"]).with_columns(
+                (pl.col("retention_time") * 60.0).alias(rt_column)
+            )
+        }
+    x_column, y_column = ("mass", rt_column) if swapped else (rt_column, "mass")
+    x_label, y_label = ("m/z", rt_label(rt_unit)) if swapped else (rt_label(rt_unit), "m/z")
+    return Heatmap(
+        cache_id=f"{prefix}peaks_heatmap{suffix}",
+        cache_path=str(paths["component_cache"]),
+        filters={"im_dimension": "im_id"} if use_im_filter else None,
+        categorical_filters=["im_dimension"] if use_im_filter else None,
+        x_column=x_column,
+        y_column=y_column,
+        intensity_column="intensity",
+        interactivity={"spectrum": "scan_id", "peak": "peak_id"},
+        title="Peak Map",
+        x_label=x_label,
+        y_label=y_label,
+        min_points=20000,
+        colorscale="Portland",
+        zoom_identifier=zoom_identifier(rt_unit, swapped),
+        **source,
+    )
 
 
 def create_id_components(
