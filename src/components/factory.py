@@ -452,6 +452,80 @@ def create_chromatogram_components(
     return plots
 
 
+def _stale_cache(cache_path: str, cache_id: str, inputs_mtime: float) -> bool:
+    """True when the Insight cache is missing or older than its inputs."""
+    manifest = Path(cache_path) / cache_id / "manifest.json"
+    return not manifest.exists() or manifest.stat().st_mtime < inputs_mtime
+
+
+def create_im_components(
+    paths: dict,
+    im_info: dict,
+    inputs_mtime: float,
+    file_id: str = "",
+) -> Dict[str, Any]:
+    """Ion mobility map and mobilogram of the selected spectrum.
+
+    Both follow the ``spectrum`` selection. The map shows m/z against ion
+    mobility; its overview level holds the most intense peak per bin
+    (``im_peaks_binned``) and a zoom reaches every peak (``im_peaks``).
+    Clicking a point selects that peak. The mobilogram is the summed
+    intensity per ion mobility bin.
+
+    Returns:
+        Dict with keys ``im_map`` and ``mobilogram``.
+    """
+    from src.preprocessing.ion_mobility import im_axis_label
+
+    cache_path = str(paths["component_cache"])
+    prefix = f"{file_id}_" if file_id else ""
+    paths["component_cache"].mkdir(parents=True, exist_ok=True)
+    im_label = im_axis_label(im_info)
+
+    map_id = f"{prefix}im_map"
+    im_map = Heatmap(
+        cache_id=map_id,
+        data=pl.scan_parquet(paths["im_peaks"]),
+        levels=[pl.scan_parquet(paths["im_peaks_binned"])],
+        cache_path=cache_path,
+        regenerate_cache=_stale_cache(cache_path, map_id, inputs_mtime),
+        filters={"spectrum": "scan_id"},
+        x_column="mass",
+        y_column="ion_mobility",
+        intensity_column="intensity",
+        interactivity={"peak": "peak_id"},
+        # Own zoom state: the peak map's (RT x m/z) does not apply here
+        zoom_identifier="im_map_zoom",
+        title="Ion Mobility Map (selected spectrum)",
+        x_label="m/z",
+        y_label=im_label,
+        min_points=20000,
+        # A zoom shows the peaks of the overview level, or every peak once the
+        # overview has fewer than min_points there. Downsampling the zoomed
+        # window instead bins it by the data ranges (m/z spans thousands, ion
+        # mobility about one), which leaves a few dozen ion mobility rows.
+        downsample_zoomed=False,
+        colorscale="Portland",
+    )
+
+    mobilogram_id = f"{prefix}mobilogram"
+    mobilogram = SeriesPlot(
+        cache_id=mobilogram_id,
+        data_path=str(paths["mobilogram"]),
+        cache_path=cache_path,
+        regenerate_cache=_stale_cache(cache_path, mobilogram_id, inputs_mtime),
+        filters={"spectrum": "scan_id"},
+        x_column="ion_mobility",
+        y_column="intensity",
+        title="Mobilogram (selected spectrum)",
+        x_label=im_label,
+        y_label="Summed intensity",
+        mode="lines",
+        show_legend=False,
+    )
+    return {"im_map": im_map, "mobilogram": mobilogram}
+
+
 def reconstruct_ms_components(
     cache_path: str,
     file_id: str = "",

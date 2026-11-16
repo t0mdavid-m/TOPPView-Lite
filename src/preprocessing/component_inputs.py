@@ -45,9 +45,9 @@ def component_cache_is_valid(paths: dict) -> bool:
         if f.stat().st_mtime < raw_mtime:
             return False
 
-    # Check if im_table needs to be created/updated
+    # The ion mobility summary table exists for FAIMS (one row per CV) only
     im_info = load_im_info(paths)
-    if im_info.get("type") != "none":
+    if im_info.get("type") == "faims":
         im_table_path = paths["im_table"]
         if not im_table_path.exists():
             return False
