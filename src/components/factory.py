@@ -11,6 +11,7 @@ from typing import Dict, Optional, Any
 import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
 from src.common.plot_style import spectrum_styling
+from src.preprocessing.ion_mobility import precursor_im_column
 
 # Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
 # MirrorPlot needs disjoint identifiers for its two halves.
@@ -21,6 +22,12 @@ MIRROR_BOTTOM_IDENTIFIER = "mirror_identification"
 # AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
 if not hasattr(SequenceView, "_get_render_key"):
     SequenceView._get_render_key = lambda self: None
+
+
+def _precursor_im_columns(im_info: dict) -> list:
+    """The precursor ion mobility column of a spectra table, if the file has one."""
+    column = precursor_im_column(im_info)
+    return [column] if column else []
 
 
 def create_ms_components(
@@ -104,6 +111,7 @@ def create_ms_components(
                 "formatterParams": {"precision": 2, "symbol": ""},
             },
             {"field": "charge", "title": "z", "sorter": "number", "width": 50},
+            *_precursor_im_columns(im_info),
             {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
         ],
         title="Spectra",
@@ -259,6 +267,7 @@ def create_id_components(
                 "formatterParams": {"precision": 2, "symbol": ""},
             },
             {"field": "charge", "title": "z", "sorter": "number", "width": 50},
+            *_precursor_im_columns(im_info),
             {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
             {"field": "num_ids", "title": "# IDs", "sorter": "number", "width": 60},
         ],

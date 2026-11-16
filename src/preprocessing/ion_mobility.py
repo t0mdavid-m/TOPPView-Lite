@@ -39,6 +39,39 @@ def im_axis_label(im_info: dict) -> str:
     return "Ion mobility"
 
 
+def has_precursor_mobility(im_info: dict) -> bool:
+    """True when some precursor of the file was isolated at an ion mobility."""
+    return bool(im_info.get("precursor_im_unit"))
+
+
+# Short titles: the spectra table shares its row with the peak list
+_PRECURSOR_IM_TITLES = {
+    "Vs/cm2": "1/K₀",
+    "ms": "Drift (ms)",
+    "A2": "CCS (Å²)",
+}  # any other unit ("unknown"): "IM"
+
+
+def precursor_im_column(im_info: dict) -> Optional[dict]:
+    """Spectra table column of the precursor ion mobility, or None without one.
+
+    The "fixed" formatter leaves the cell empty for a spectrum without one
+    (the table receives it as NaN).
+    """
+    if not has_precursor_mobility(im_info):
+        return None
+    title = _PRECURSOR_IM_TITLES.get(im_info["precursor_im_unit"], "IM")
+    return {
+        "field": "precursor_im",
+        "title": title,
+        "headerTooltip": "Ion mobility of the precursor",
+        "sorter": "number",
+        "formatter": "fixed",
+        "formatterParams": {"precision": 3},
+        "width": 80,
+    }
+
+
 def _bin_index(column: str, lo: float, hi: float, bins: int) -> pl.Expr:
     width = (hi - lo) / bins if hi > lo else 1.0
     return (

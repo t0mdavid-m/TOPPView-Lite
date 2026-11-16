@@ -10,6 +10,8 @@ from typing import Optional, Callable
 
 import polars as pl
 
+from src.preprocessing.ion_mobility import has_precursor_mobility
+
 
 def load_im_info(paths: dict) -> dict:
     """Load ion mobility info from JSON file."""
@@ -91,6 +93,8 @@ def create_component_inputs(
     ]
     if has_im:
         spectra_cols.append("im_id")
+    if has_precursor_mobility(im_info):
+        spectra_cols.append("precursor_im")
 
     pl.scan_parquet(paths["metadata"]).select(spectra_cols).collect().write_parquet(
         paths["spectra_table"]
