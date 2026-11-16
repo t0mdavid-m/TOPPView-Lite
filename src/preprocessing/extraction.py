@@ -16,7 +16,7 @@ from pyopenms import MSExperiment, MzMLFile
 
 # Bumped when im_info.json or the ion mobility columns change meaning, so
 # older caches are extracted again.
-IM_INFO_VERSION = 2
+IM_INFO_VERSION = 3
 
 # Names of float data arrays holding one ion mobility value per peak
 # (matched as substrings of the lower-cased array name).
@@ -115,6 +115,47 @@ def _peak_im_array(spectrum, n_peaks: int) -> Optional[np.ndarray]:
     return None
 
 
+# Spectrum drift time units that name a precursor's ion mobility for sure:
+# VSSC (1/K0) and CCS. OpenMS writes every precursor drift time as
+# "ion mobility drift time" in milliseconds, whatever it is, and reading
+# that back sets the unit to MILLISECOND, so that unit (and NONE) says
+# nothing about the values.
+_PRECURSOR_IM_UNITS = {2: "Vs/cm2", 4: "A2"}
+
+
+def _precursor_im(spectrum, precursor) -> Optional[tuple]:
+    """Ion mobility of a precursor and its unit ("" if unknown), or None.
+
+    pyOpenMS keeps it as the precursor's drift time (-1 when unset). The
+    precursor has no unit of its own: reading the mzML sets the spectrum's
+    drift time unit from the cvParam. A FAIMS CV (unit 3) is a property of
+    the whole spectrum, not of the precursor.
+    """
+    value = float(precursor.getDriftTime())
+    if not np.isfinite(value) or value < 0:
+        return None
+    unit = int(spectrum.getDriftTimeUnit())
+    if unit == 3:
+        return None
+    return value, _PRECURSOR_IM_UNITS.get(unit, "")
+
+
+def _precursor_im_unit(units: set, im_type: str, im_unit: str) -> str:
+    """One unit for the precursors' ion mobility ("" when none has one).
+
+    A unit the file states for sure wins; otherwise the precursors are taken
+    to be in the unit of the file's per-peak ion mobility, else "unknown".
+    """
+    if not units:
+        return ""
+    known = units - {""}
+    if "" not in units and len(known) == 1:
+        return next(iter(known))
+    if "" in units and im_type == "tims" and im_unit and known <= {im_unit}:
+        return im_unit
+    return "unknown"
+
+
 def get_faims_cv_from_spectrum(spectrum) -> Optional[float]:
     """Extract FAIMS compensation voltage from spectrum.
 
@@ -164,9 +205,9 @@ def detect_ion_mobility_type(exp: MSExperiment) -> tuple[str, str, list]:
     # Check for TIMS ion mobility in FloatDataArrays
     im_array_names = IM_ARRAY_NAMES
 
+    # Any MS level: PASEF and drift time files may carry the values only in
+    # their fragment spectra.
     for spectrum in exp:
-        if spectrum.getMSLevel() != 1:
-            continue
         float_arrays = spectrum.getFloatDataArrays()
         for fda in float_arrays:
             name = fda.getName().lower() if fda.getName() else ""
@@ -238,6 +279,10 @@ def extract_mzml_to_parquet(
     meta_ms_levels = np.empty(num_spectra, dtype=np.int8)
     meta_precursor_mzs = np.empty(num_spectra, dtype=np.float32)
     meta_charges = np.empty(num_spectra, dtype=np.int8)
+    # Ion mobility at which the precursor was isolated (timsTOF PASEF 1/K0,
+    # drift time); NaN when the precursor has none
+    meta_precursor_ims = np.full(num_spectra, np.nan, dtype=np.float32)
+    precursor_im_units = set()
     meta_num_peaks = np.empty(num_spectra, dtype=np.int32)
     meta_im_ids = np.empty(num_spectra, dtype=np.int32)
 
@@ -267,6 +312,10 @@ def extract_mzml_to_parquet(
             precursor = spectrum.getPrecursors()[0]
             meta_precursor_mzs[spec_idx] = precursor.getMZ()
             meta_charges[spec_idx] = precursor.getCharge()
+            precursor_im = _precursor_im(spectrum, precursor)
+            if precursor_im is not None:
+                meta_precursor_ims[spec_idx], unit = precursor_im
+                precursor_im_units.add(unit)
         else:
             meta_precursor_mzs[spec_idx] = 0.0
             meta_charges[spec_idx] = 0
@@ -299,6 +348,9 @@ def extract_mzml_to_parquet(
         "ms_level": meta_ms_levels,
         "precursor_mz": meta_precursor_mzs,
         "charge": meta_charges,
+        # null, not NaN, where a precursor has none: the tables send their
+        # rows as JSON, which has no NaN
+        "precursor_im": pl.Series(meta_precursor_ims).fill_nan(None),
         "num_peaks": meta_num_peaks,
         "im_id": meta_im_ids,
     })
@@ -333,6 +385,8 @@ def extract_mzml_to_parquet(
     # Write ion mobility info
     im_info = {
         "version": IM_INFO_VERSION,
+        # Unit of the precursors' ion mobility ("" when no precursor has one)
+        "precursor_im_unit": _precursor_im_unit(precursor_im_units, im_type, im_unit),
         "type": im_type,
         "unit": im_unit,
         "unique_values": unique_cvs if im_type == 'faims' else [],
