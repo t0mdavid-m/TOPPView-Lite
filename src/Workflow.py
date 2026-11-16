@@ -1,3 +1,4 @@
+import shutil
 import streamlit as st
 from src.workflow.WorkflowManager import WorkflowManager
 
@@ -51,6 +52,7 @@ class Workflow(WorkflowManager):
     # downloads and deletes them. Results are read from self.results_dir.
     multi_run = True
     run_page = Path("content", "topp_workflow_execution.py")
+    configure_page = Path("content", "topp_workflow_parameter.py")
 
     def __init__(self) -> None:
         # Initialize the parent class with the workflow name.
@@ -129,6 +131,11 @@ class Workflow(WorkflowManager):
             self.logger.log("ERROR: No mzML files selected.")
             return False
 
+        # An analysis added to an earlier run (missing_options): its feature
+        # detection and linking are reused, only the steps after them run.
+        if self._reuse_features():
+            return self._custom_tool(Path(self.results_dir, "feature-linking", "feature_matrix.tsv"))
+
         # Convert any Thermo .raw / Bruker .d input to mzML (mzML passes through).
         in_files = self.executor.convert_to_mzml(self.params["mzML-files"])
         if in_files is None:
@@ -146,13 +153,19 @@ class Workflow(WorkflowManager):
         )
 
         # Run FeatureFinderMetabo tool with input and output files.
-        # run_topp returns False if any of the commands it ran failed.
+        # run_topp returns False if any of the commands it ran failed. With
+        # allow_failed=True a file it fails on is left out instead (the Run
+        # page says which and why), and False means it failed on every file.
         self.logger.log("Detecting features...")
         if not self.executor.run_topp(
-            "FeatureFinderMetabo", input_output={"in": in_mzML, "out": out_ffm}
+            "FeatureFinderMetabo",
+            input_output={"in": in_mzML, "out": out_ffm},
+            allow_failed=True,
         ):
             self.logger.log("ERROR: Feature detection failed.")
             return False
+        # The next steps take only the files feature detection worked on
+        out_ffm = self.executor.keep_succeeded(out_ffm)
 
         # Prepare input and output files for feature linking
         in_fl = self.file_manager.get_files(out_ffm, collect=True)
@@ -178,17 +191,38 @@ class Workflow(WorkflowManager):
             self.logger.log("ERROR: Exporting consensus features failed.")
             return False
 
+        return self._custom_tool(Path(out_fl[0]).with_suffix(".tsv"))
+
+    # The steps whose results an analysis added to a run takes from it
+    FEATURE_STEPS = ["FeatureFinderMetabo", "FeatureLinkerUnlabeledKD"]
+
+    def _reuse_features(self) -> bool:
+        """Copy the feature detection and linking of the run this start adds an
+        analysis to (``follow_up(..., same_files=..., keep=FEATURE_STEPS)``)
+        into this run. False when the start reuses nothing (or it is gone)."""
+        info = self.follow_up_info()
+        reuses = info.get("reuses") or []
+        if not reuses or not set(self.FEATURE_STEPS) <= set(info.get("kept") or []):
+            return False
+        source = self.runs.results_dir(reuses[0])
+        if not Path(source, "feature-linking", "feature_matrix.tsv").exists():
+            self.logger.log(f"The results of {info.get('name', reuses[0])} are gone: running every step.")
+            return False
+        for step in ("feature-detection", "feature-linking"):
+            if Path(source, step).is_dir():
+                shutil.copytree(Path(source, step), Path(self.results_dir, step), dirs_exist_ok=True)
+        self.logger.log(f"Reusing the features of {info.get('name', reuses[0])}.")
+        return True
+
+    def _custom_tool(self, features: Path) -> bool:
         # Check if the custom Python tool should be run.
         if self.params["run-python-script"]:
             # Example for a custom Python tool, which is located in src/python-tools.
             # It writes the features with the highest mean intensity.
             out_top = self.file_manager.get_files("top-features.tsv", set_results_dir="custom-tool")
-            if not self.executor.run_python(
-                "example", {"in": [str(Path(out_fl[0]).with_suffix(".tsv"))], "out": out_top}
-            ):
+            if not self.executor.run_python("example", {"in": [str(features)], "out": out_top}):
                 self.logger.log("ERROR: Custom Python script failed.")
                 return False
-
         return True
 
     # The Results page: components arranged in views. A component that shows
@@ -229,18 +263,25 @@ class Workflow(WorkflowManager):
             self.run_id, changes or {}, page=Path("content", "topp_workflow_parameter.py"),
             note="to add more files", add_files="mzML-files") or _no_settings()
 
+    def add_analysis(self, changes) -> None:
+        """Open Configure with this run's settings and ``changes``, to add an analysis
+        to the run: its files are locked and its features reused."""
+        self.follow_up(
+            self.run_id, changes, page=Path("content", "topp_workflow_parameter.py"),
+            note="with the custom Python tool switched on", same_files="mzML-files",
+            keep=self.FEATURE_STEPS) or _no_settings()
+
     def missing_options(self, missing: list, view) -> list:
-        """What the Results page offers for a view whose run lacks ``missing``: processing
-        more files with this run's settings and the missing analysis switched on."""
+        """What the Results page offers for a view whose run lacks ``missing``: the
+        missing analysis added to this run, its files and features kept."""
         changes = {"run-python-script": True} if "custom-tool" in missing else {}
         return [{
-            "label": "Process more files with these settings",
-            "icon": ":material/library_add:",
-            "help": "Opens Configure with this run's settings"
-                    + (" and the custom Python tool switched on" if changes else "")
-                    + ", to pick files to add. Only those are processed; the Results page then "
-                    "shows them with this run's files as one experiment.",
-            "on_click": lambda: self.add_files(changes),
+            "label": "Add the custom Python tool to this run",
+            "icon": ":material/add_circle:",
+            "help": "Opens Configure with this run's settings and the custom Python tool switched "
+                    "on. The run's files stay as they are and its features are reused, so only the "
+                    "tool's settings can be changed; the new run is kept next to this one.",
+            "on_click": lambda: self.add_analysis(changes),
         }]
 
     @st.fragment
@@ -250,7 +291,7 @@ class Workflow(WorkflowManager):
             layout_path, self.COMPONENTS, self.PRESETS, self.PRESETS[0]["layout"], key="topp-results-view",
             available=self.available(), analyses=self.ANALYSES,
             unavailable_options=self.missing_options, target="the Results page",
-            actions=[{"id": "add-files", "icon": "➕", "label": "Add files", "on_click": self.add_files,
+            actions=[{"id": "add-files", "icon": "➕", "label": "Add analysis", "on_click": self.add_files,
                       "help": "Process more files with this run's settings and add them to its experiment"}],
         )
         layout, _ = resolve_layout(layout_path, self.COMPONENTS, self.PRESETS[0]["layout"])
