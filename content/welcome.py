@@ -243,13 +243,13 @@ def render_hero_section():
 
 def render_navigation_buttons():
     """Render the main navigation buttons."""
-    spacer1, col1, col2, spacer2 = st.columns([1, 2, 2, 1], gap="medium")
+    col1, col2, col3, col4 = st.columns(4, gap="medium")
 
     with col1:
         create_navigation_button(
             "📂",
             "Upload Files",
-            "Upload and preprocess mzML files",
+            "Add mzML files, and optionally idXML and featureXML files, and process them",
             "content/upload.py"
         )
 
@@ -259,6 +259,22 @@ def render_navigation_buttons():
             "View Data",
             "Interactive visualization",
             "content/viewer.py"
+        )
+
+    with col3:
+        create_navigation_button(
+            "🧩",
+            "Layout",
+            "Arrange the components shown on the Viewer page",
+            "content/layout.py"
+        )
+
+    with col4:
+        create_navigation_button(
+            "🧰",
+            "Tools",
+            "Process an mzML file: centroid spectra, detect features or mass traces",
+            "content/tools.py"
         )
 
 
@@ -294,16 +310,16 @@ def render_features():
     st.markdown("---")
     st.markdown("### Features")
 
-    col1, col2, col3, col4 = st.columns(4)
-
     features = [
         ("🗺️", "Peak Map", "Interactive 2D heatmap with zoom-based resolution"),
         ("📊", "Spectrum View", "Click to view individual mass spectra"),
         ("📋", "Data Tables", "Browse spectra and peaks with sorting/filtering"),
-        ("⚡", "Fast Loading", "Preprocessed data for instant visualization"),
+        ("🧬", "Identifications", "Peptide identifications from idXML, with a sequence view"),
+        ("🧩", "Your Layout", "Arrange the Viewer and compare several files side by side"),
+        ("🧰", "Tools", "Centroid spectra and detect features without leaving the app"),
     ]
 
-    for col, (icon, title, desc) in zip([col1, col2, col3, col4], features):
+    for col, (icon, title, desc) in zip(st.columns(3) + st.columns(3), features):
         with col:
             st.markdown(
                 f"""
@@ -327,9 +343,11 @@ def render_quick_start():
         <div class="info-box">
             <h4>Getting Started</h4>
             <p>
-                1. <strong>Upload</strong> your mzML files on the Upload page<br>
-                2. Preprocess files for fast visualization<br>
-                3. Go to the <strong>Viewer</strong> to explore your data interactively
+                1. On the <strong>Upload</strong> page, add your mzML files with <strong>Add files to workspace</strong>.
+                Optionally add idXML and featureXML files, matched to an mzML file by name<br>
+                2. Press <strong>Process N file(s)</strong> to prepare them for fast visualization<br>
+                3. Press <strong>Go to Viewer</strong> to explore your data interactively<br>
+                4. Change what the Viewer shows on the <strong>Layout</strong> page
             </p>
         </div>
         """,
@@ -342,6 +360,7 @@ def render_quick_start():
         st.markdown("**Supported Data:**")
         st.markdown("""
         - mzML files (MS1 and MS2)
+        - idXML identifications and featureXML features
         - FAIMS ion mobility data
         - Large datasets (millions of peaks)
         """)
@@ -352,6 +371,7 @@ def render_quick_start():
         - Click heatmap to select spectrum
         - Zoom for higher resolution
         - Cross-linked tables and plots
+        - Several files side by side, each with its own file picker
         """)
 
 
