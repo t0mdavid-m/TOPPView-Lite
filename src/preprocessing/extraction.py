@@ -12,6 +12,8 @@ import numpy as np
 import polars as pl
 from pyopenms import MSExperiment, MzMLFile
 
+from src.preprocessing.imaging import pixel_position
+
 
 def get_cache_paths(workspace: Path, mzml_path: Path) -> dict:
     """Get all cache file paths for a given mzML file within a workspace.
@@ -200,6 +202,9 @@ def extract_mzml_to_parquet(
     meta_charges = np.empty(num_spectra, dtype=np.int8)
     meta_num_peaks = np.empty(num_spectra, dtype=np.int32)
     meta_im_ids = np.empty(num_spectra, dtype=np.int32)
+    # Imaging (imzML converted to mzML): the pixel of each spectrum, -1 if none
+    meta_pixel_x = np.full(num_spectra, -1, dtype=np.int32)
+    meta_pixel_y = np.full(num_spectra, -1, dtype=np.int32)
 
     # Fill arrays
     peak_idx = 0
@@ -222,6 +227,7 @@ def extract_mzml_to_parquet(
         else:
             im_id = -1
         meta_im_ids[spec_idx] = im_id
+        meta_pixel_x[spec_idx], meta_pixel_y[spec_idx] = pixel_position(spectrum)
 
         if ms_level > 1 and spectrum.getPrecursors():
             precursor = spectrum.getPrecursors()[0]
@@ -258,6 +264,10 @@ def extract_mzml_to_parquet(
         "num_peaks": meta_num_peaks,
         "im_id": meta_im_ids,
     })
+    if (meta_pixel_x >= 0).any():
+        metadata_df = metadata_df.with_columns(
+            pl.Series("pixel_x", meta_pixel_x), pl.Series("pixel_y", meta_pixel_y)
+        )
     metadata_df.write_parquet(paths["metadata"])
 
     # Write peaks

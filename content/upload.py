@@ -23,6 +23,7 @@ from src.preprocessing.identification import (
 )
 from src.components.factory import create_id_components
 from src.preprocessing.features import FEATURE_DIR_NAME
+from src.preprocessing.imaging import convert_pairs, find_pairs, imzml_dir
 import polars as pl
 
 params = page_setup()
@@ -421,6 +422,66 @@ if feature_files:
         if c1.button("⚠️ Remove **all** featureXML"):
             for f in feature_files:
                 f.unlink(missing_ok=True)
+            st.rerun()
+
+# ======================= imzML Upload Section =======================
+v_space(2)
+st.markdown("---")
+st.markdown("### Imaging Data (Optional)")
+st.markdown("""
+Upload mass spectrometry imaging data as an imzML file together with its binary `.ibd` file
+(same name). Each pixel becomes a spectrum of an mzML file in the list above, and the
+viewer's **Ion image** shows where an m/z occurs: click a peak to see its image, click a
+pixel to see its spectrum.
+""")
+
+imaging_dir = imzml_dir(st.session_state.workspace)
+imaging_dir.mkdir(parents=True, exist_ok=True)
+
+with st.form("imzML-upload", clear_on_submit=True):
+    imaging_uploads = st.file_uploader(
+        "imzML and ibd files",
+        # Both parts of a pair are needed, online too
+        accept_multiple_files=True,
+        type=["imzML", "ibd"],
+    )
+    cols = st.columns(3)
+    if cols[1].form_submit_button("Add imaging files", type="primary"):
+        if not imaging_uploads:
+            st.warning("Select files first.")
+        else:
+            for upload in imaging_uploads:
+                Path(imaging_dir, Path(upload.name).name).write_bytes(upload.getbuffer())
+            with st.spinner("Converting imzML to mzML..."):
+                st.session_state["imzml_messages"] = convert_pairs(
+                    st.session_state.workspace, mzML_dir
+                )
+            st.rerun()
+
+for message in st.session_state.pop("imzml_messages", []):
+    st.info(message)
+
+imaging_pairs = find_pairs(imaging_dir)
+if imaging_pairs:
+    st.markdown("##### Imaging files in workspace:")
+    show_table(pd.DataFrame({
+        "imzML": [pair["imzML"].name if pair["imzML"] else "missing" for pair in imaging_pairs.values()],
+        "ibd": [pair["ibd"].name if pair["ibd"] else "missing" for pair in imaging_pairs.values()],
+        "mzML": [
+            f"{stem}.mzML" if Path(mzML_dir, f"{stem}.mzML").exists() else "—"
+            for stem in imaging_pairs
+        ],
+    }))
+    with st.expander("🗑️ Remove imaging files"):
+        to_remove_imaging = st.multiselect(
+            "select imaging files (the mzML made from them stays in the list above)",
+            options=list(imaging_pairs),
+        )
+        if st.button("Remove **selected** imaging files", type="primary", disabled=not to_remove_imaging):
+            for stem in to_remove_imaging:
+                for path in imaging_pairs[stem].values():
+                    if path:
+                        path.unlink(missing_ok=True)
             st.rerun()
 
 save_params(params)

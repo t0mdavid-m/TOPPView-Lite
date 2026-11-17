@@ -20,6 +20,7 @@ from src.components.factory import (
     MIRROR_BOTTOM_IDENTIFIER,
     create_chromatogram_components,
     create_feature_table,
+    create_ion_image_plot,
     create_mirror_plot,
 )
 from src.components.tool_panel import console_panel, operation_panel
@@ -31,6 +32,7 @@ from src.preprocessing.features import (
     find_matching_featurexml,
     get_feature_cache_paths,
 )
+from src.preprocessing.imaging import DEFAULT_PPM, create_ion_image, has_pixels, peak_mz
 from src.preprocessing.mirror import ensure_mirror_input
 
 # name -> label, group, and when the component is offered ("always", "ids",
@@ -42,6 +44,7 @@ CATALOG: List[Dict[str, Any]] = [
     {"name": "spectra_table", "label": "Spectra table", "group": "Tables", "needs": "always"},
     {"name": "peak_list", "label": "Peak list", "group": "Tables", "needs": "always"},
     {"name": "im_table", "label": "Ion mobility table", "group": "Tables", "needs": "im"},
+    {"name": "ion_image", "label": "Ion image", "group": "Imaging", "needs": "imaging"},
     {"name": "id_table", "label": "Identifications", "group": "Identifications", "needs": "ids"},
     {"name": "sequence_view", "label": "Sequence view", "group": "Identifications", "needs": "ids"},
     {"name": "features", "label": "Features table", "group": "Features", "needs": "features"},
@@ -52,6 +55,7 @@ CATALOG: List[Dict[str, Any]] = [
 DEFAULT_LAYOUT: List[List[str]] = [
     ["tools"],
     ["im_table"],
+    ["ion_image"],
     ["chromatogram"],
     ["peak_map"],
     ["spectra_table", "peak_list"],
@@ -66,6 +70,7 @@ _NEEDS_NOTE = {
     "ids": "when an idXML matches the mzML",
     "im": "for ion mobility data",
     "features": "when a featureXML matches the mzML",
+    "imaging": "for imaging data (imzML)",
 }
 
 
@@ -129,6 +134,7 @@ def available_catalog(ctx: ViewerContext) -> List[Dict[str, Any]]:
         "ids": ctx.has_ids,
         "im": ctx.has_im,
         "features": ctx.featurexml_path is not None,
+        "imaging": has_pixels(ctx.paths),
     }
     return [e for e in CATALOG if have[e["needs"]]]
 
@@ -157,6 +163,53 @@ def peak_map(ctx: ViewerContext) -> None:
     ctx.ms_components["heatmap"](
         key=f"{ctx.file_key}_heatmap", state_manager=ctx.state_manager, height=400
     )
+
+
+def ion_image(ctx: ViewerContext) -> None:
+    """One pixel per spectrum of an imaging file, coloured by an ion's intensity.
+
+    Shows the TIC, a typed m/z or the m/z of the peak last selected (in the
+    spectrum or the peak list), each summed within a ppm tolerance. A click
+    on a pixel selects its spectrum.
+    """
+    mode_key = ctx.key(f"viewer_ion_image_mode_{ctx.file_id}")
+    picked_key = ctx.key(f"viewer_ion_image_peak_mz_{ctx.file_id}")
+    # The peak selection is dropped once another pixel is picked, so its
+    # m/z is kept for the image
+    selected = peak_mz(ctx.paths, ctx.state_manager.get_selection("peak"))
+    if selected is not None:
+        st.session_state[picked_key] = selected
+    picked = st.session_state.get(picked_key)
+
+    cols = st.columns([3, 2, 2])
+    mode = cols[0].segmented_control(
+        "Image of",
+        options=["peak", "mz", "tic"],
+        format_func={"peak": "Selected peak", "mz": "m/z", "tic": "TIC"}.get,
+        default="peak",
+        key=mode_key,
+    ) or "peak"
+    mz = None
+    if mode == "mz":
+        mz = cols[1].number_input(
+            "m/z", min_value=0.0, value=round(picked, 4) if picked else 500.0,
+            step=0.01, format="%.4f", key=ctx.key(f"viewer_ion_image_mz_{ctx.file_id}"),
+        )
+    elif mode == "peak":
+        mz = picked
+    ppm = DEFAULT_PPM
+    if mode != "tic":
+        ppm = cols[2].number_input(
+            "Tolerance (ppm)", min_value=0.1, max_value=1000.0, value=DEFAULT_PPM,
+            step=1.0, key=ctx.key(f"viewer_ion_image_ppm_{ctx.file_id}"),
+        )
+    if mode == "peak" and mz is None:
+        st.caption("Click a peak in the spectrum or the peak list to see where it is. Until then: TIC.")
+
+    title = "TIC image" if mz is None else f"Ion image m/z {mz:.4f} ± {ppm:g} ppm"
+    image_path = create_ion_image(ctx.paths, mz, ppm)
+    plot = create_ion_image_plot(ctx.paths, image_path, title, ctx.file_id)
+    plot(key=f"{ctx.file_key}_ion_image", state_manager=ctx.state_manager, height=450)
 
 
 def spectra_table(ctx: ViewerContext) -> None:
@@ -408,6 +461,7 @@ PANELS: Dict[str, Callable[[ViewerContext], None]] = {
     "spectrum": spectrum,
     "spectra_table": spectra_table,
     "peak_list": peak_list,
+    "ion_image": ion_image,
     "im_table": im_table,
     "id_table": id_table,
     "sequence_view": sequence_view,
