@@ -452,6 +452,42 @@ def create_chromatogram_components(
     return plots
 
 
+def create_ion_image_plot(
+    paths: dict, image_path: Path, title: str, file_id: str = ""
+) -> Heatmap:
+    """Pixels of an imaging file coloured by an image's intensity.
+
+    ``image_path`` is written by ``src.preprocessing.imaging.create_ion_image``;
+    each image gets its own cache, rebuilt when the file is newer. Clicking a
+    pixel selects its spectrum.
+    """
+    cache_path = str(paths["component_cache"])
+    paths["component_cache"].mkdir(parents=True, exist_ok=True)
+    prefix = f"{file_id}_" if file_id else ""
+    cache_id = f"{prefix}{image_path.stem}"
+    manifest = Path(cache_path) / cache_id / "manifest.json"
+    stale = not manifest.exists() or manifest.stat().st_mtime < image_path.stat().st_mtime
+    return Heatmap(
+        cache_id=cache_id,
+        data_path=str(image_path),
+        cache_path=cache_path,
+        regenerate_cache=stale,
+        x_column="pixel_x",
+        y_column="pixel_y",
+        intensity_column="intensity",
+        interactivity={"spectrum": "scan_id"},
+        # Own zoom state: the peak map's (RT x m/z) does not apply here
+        zoom_identifier="ion_image_zoom",
+        title=title,
+        x_label="x (pixel)",
+        y_label="y (pixel)",
+        # Every pixel is shown; an image has far fewer points than a peak map
+        min_points=1_000_000,
+        downsample_zoomed=False,
+        colorscale="Viridis",
+    )
+
+
 def reconstruct_ms_components(
     cache_path: str,
     file_id: str = "",
