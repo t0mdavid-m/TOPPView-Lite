@@ -12,6 +12,11 @@ import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
 from src.common.plot_style import spectrum_styling
 
+# The peak map's Insight cache. Its configuration (highlight among it) is read
+# back from the cache, so a configuration change needs a new id: viewers then
+# fail to reconstruct the old one and build the new one.
+PEAK_MAP_CACHE_ID = "peaks_heatmap_v2"
+
 # Identifier the viewer keeps equal to "identification" for the mirror's bottom half.
 # MirrorPlot needs disjoint identifiers for its two halves.
 MIRROR_BOTTOM_IDENTIFIER = "mirror_identification"
@@ -172,7 +177,7 @@ def create_ms_components(
     categorical_filters = ["im_dimension"] if use_im_filter else None
 
     heatmap = Heatmap(
-        cache_id=f"{prefix}peaks_heatmap",
+        cache_id=f"{prefix}{PEAK_MAP_CACHE_ID}",
         data_path=str(paths["heatmap_input"]),
         cache_path=cache_path,
         filters=heatmap_filters,
@@ -181,6 +186,8 @@ def create_ms_components(
         y_column="mass",
         intensity_column="intensity",
         interactivity={"spectrum": "scan_id", "peak": "peak_id"},
+        # Ring the peaks of the selected spectrum, wherever it was selected
+        highlight={"spectrum": "scan_id"},
         title="Peak Map",
         x_label="Retention Time (min)",
         y_label="m/z",
@@ -484,7 +491,7 @@ def reconstruct_ms_components(
     spectra_table = Table(cache_id=f"{prefix}spectra_table", cache_path=cache_path)
     peaks_table = Table(cache_id=f"{prefix}peaks_table", cache_path=cache_path)
     spectrum_plot = LinePlot(cache_id=f"{prefix}spectrum_plot", cache_path=cache_path)
-    heatmap = Heatmap(cache_id=f"{prefix}peaks_heatmap", cache_path=cache_path)
+    heatmap = Heatmap(cache_id=f"{prefix}{PEAK_MAP_CACHE_ID}", cache_path=cache_path)
 
     return {
         "im_table": im_table,

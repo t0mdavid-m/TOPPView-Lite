@@ -98,6 +98,23 @@ class TestCreateMsComponents:
         heatmap_call = mock_heatmap.call_args
         assert 'data_path' in heatmap_call.kwargs
 
+    @patch('src.components.factory.Table')
+    @patch('src.components.factory.LinePlot')
+    @patch('src.components.factory.Heatmap')
+    def test_heatmap_marks_the_selected_spectrum(self, mock_heatmap, mock_lineplot, mock_table, populated_cache, sample_im_info_none):
+        """The peak map rings the peaks of the selected spectrum, under its own cache id."""
+        from src.components.factory import PEAK_MAP_CACHE_ID, create_ms_components
+        from src.preprocessing.component_inputs import create_component_inputs
+        create_component_inputs(populated_cache)
+
+        create_ms_components(populated_cache, sample_im_info_none, file_id="test")
+
+        kwargs = mock_heatmap.call_args.kwargs
+        assert kwargs["highlight"] == {"spectrum": "scan_id"}
+        # The highlight is cache configuration: caches built without it must not be reused
+        assert kwargs["cache_id"] == f"test_{PEAK_MAP_CACHE_ID}"
+        assert PEAK_MAP_CACHE_ID != "peaks_heatmap"
+
 
 class TestCreateIdComponents:
     """Tests for create_id_components function."""
@@ -219,6 +236,9 @@ class TestReconstructMsComponents:
         assert "spectrum_plot" in result
         assert "heatmap" in result
         assert result["im_table"] is None
+        # The same peak map cache the viewer builds
+        from src.components.factory import PEAK_MAP_CACHE_ID
+        assert mock_heatmap.call_args.kwargs["cache_id"] == f"test_{PEAK_MAP_CACHE_ID}"
 
         # Verify Table was called with only cache_id and cache_path
         table_calls = mock_table.call_args_list
