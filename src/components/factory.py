@@ -6,7 +6,7 @@ LinePlot.from_sequence_view() for linked annotated spectrum display.
 """
 
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Iterable, Optional, Any
 
 import polars as pl
 from openms_insight import Table, LinePlot, Heatmap, SequenceView, MirrorPlot, SeriesPlot
@@ -537,16 +537,25 @@ def create_mirror_plot(
     cache_path: str,
     file_id: str = "",
     regenerate_cache: bool = False,
+    ion_types: Optional[Iterable[str]] = None,
+    losses: bool = False,
 ) -> MirrorPlot:
-    """Mirror plot: experimental spectrum (top) against the theoretical b/y ions (bottom).
+    """Mirror plot: experimental spectrum (top) against the theoretical ions (bottom).
+
+    Each choice of ``ion_types`` and ``losses`` has its own data file and cache id.
 
     Both halves are keyed by the selected identification: the top half through
     ``identification``, the bottom through ``MIRROR_BOTTOM_IDENTIFIER``, which the
     viewer sets to the same id before rendering.
     """
+    # Imported here: src.preprocessing imports this module
+    from src.preprocessing.mirror import ion_types_label, variant_tag
+
     prefix = f"{file_id}_" if file_id else ""
+    tag = variant_tag(ion_types, losses)
+    title = f"Theoretical ({ion_types_label(ion_types)} ions{', neutral losses' if losses else ''})"
     return MirrorPlot(
-        cache_id=f"{prefix}mirror_plot",
+        cache_id=f"{prefix}mirror_plot" + (f"_{tag}" if tag else ""),
         data_path=str(mirror_parquet),
         cache_path=cache_path,
         regenerate_cache=regenerate_cache,
@@ -559,7 +568,7 @@ def create_mirror_plot(
         highlight_column="matched",
         annotation_column="label",
         title_top="Experimental",
-        title_bottom="Theoretical (b/y ions)",
+        title_bottom=title,
         x_label="m/z",
         y_label="Intensity",
         styling=spectrum_styling(),
