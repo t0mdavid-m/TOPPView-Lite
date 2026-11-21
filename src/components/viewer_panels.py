@@ -31,7 +31,14 @@ from src.preprocessing.features import (
     find_matching_featurexml,
     get_feature_cache_paths,
 )
-from src.preprocessing.mirror import ensure_mirror_input
+from src.preprocessing.mirror import (
+    ALL_ION_TYPES,
+    ION_TYPES,
+    ensure_mirror_input,
+    ion_types_label,
+    normalize_ion_types,
+    variant_tag,
+)
 
 # name -> label, group, and when the component is offered ("always", "ids",
 # "im", "features"). The names are stored in saved layouts: do not rename.
@@ -207,12 +214,42 @@ def spectrum(ctx: ViewerContext) -> None:
         return
 
     state_manager = ctx.state_manager
-    mirror_key = f"viewer_mirror_{ctx.file_key}"
-    mirror_paths, rebuilt = ensure_mirror_input(ctx.paths, ctx.id_paths, ctx.search_params)
+    ion_col, loss_col = st.columns([3, 1], vertical_alignment="center")
+    with ion_col:
+        ion_types = st.segmented_control(
+            "Ion types",
+            list(ALL_ION_TYPES),
+            selection_mode="multi",
+            default=list(ION_TYPES),
+            key=ctx.key("viewer_mirror_ion_types"),
+            help="Ion types of the theoretical spectrum.",
+        )
+    with loss_col:
+        losses = st.toggle(
+            "Neutral losses",
+            key=ctx.key("viewer_mirror_losses"),
+            help="Add the H2O and NH3 losses of the ions (and those of K, R, N, Q side "
+            "chains), drawn at half height.",
+        )
+    ion_types = normalize_ion_types(ion_types)
+    if not ion_types:
+        st.caption("Pick at least one ion type.")
+        return
+    ions = ion_types_label(ion_types)
+
+    mirror_key = f"viewer_mirror_{ctx.file_key}_{variant_tag(ion_types, losses) or 'by'}"
+    mirror_paths, rebuilt = ensure_mirror_input(
+        ctx.paths, ctx.id_paths, ctx.search_params, ion_types=ion_types, losses=losses
+    )
     if rebuilt or mirror_key not in st.session_state:
         with st.spinner("Generating theoretical spectra..."):
             st.session_state[mirror_key] = create_mirror_plot(
-                mirror_paths["mirror"], ctx.cache_path, ctx.file_id, regenerate_cache=rebuilt
+                mirror_paths["mirror"],
+                ctx.cache_path,
+                ctx.file_id,
+                regenerate_cache=rebuilt,
+                ion_types=ion_types,
+                losses=losses,
             )
 
     # The bottom half follows the selected identification.
@@ -224,7 +261,7 @@ def spectrum(ctx: ViewerContext) -> None:
             state_manager.set_selection(MIRROR_BOTTOM_IDENTIFIER, selected_id)
 
     if selected_id is None:
-        st.caption("Select an identification to compare its spectrum with the theoretical b/y ions.")
+        st.caption(f"Select an identification to compare its spectrum with the theoretical {ions} ions.")
     else:
         match = (
             pl.scan_parquet(mirror_paths["summary"])
@@ -233,9 +270,12 @@ def spectrum(ctx: ViewerContext) -> None:
         )
         if match.height:
             row = match.row(0, named=True)
+            loss_note = (
+                f", plus {row.get('matched_losses') or 0} neutral-loss ions" if losses else ""
+            )
             st.caption(
-                f"{row['matched_ions']} of {row['total_ions']} theoretical b/y ions matched "
-                f"({row['coverage']:.0f} %). Matched peaks are red and labelled."
+                f"{row['matched_ions']} of {row['total_ions']} theoretical {ions} ions matched "
+                f"({row['coverage']:.0f} %){loss_note}. Matched peaks are blue and labelled."
             )
         else:
             st.caption("This identification is not linked to a spectrum.")

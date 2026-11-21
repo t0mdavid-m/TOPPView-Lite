@@ -14,6 +14,10 @@ from src.preprocessing.mirror import (
     mirror_cache_is_valid,
     theoretical_ions,
     _make_generator,
+    ion_label,
+    ion_types_label,
+    normalize_ion_types,
+    variant_tag,
 )
 
 
@@ -92,7 +96,7 @@ def test_build_mirror_data_halves_and_summary():
     assert bottom["intensity"].unique().to_list() == [top["intensity"].max()]
 
     assert summary.to_dicts() == [
-        {"id_idx": 0, "matched_ions": 3, "total_ions": 13, "coverage": 300 / 13}
+        {"id_idx": 0, "matched_ions": 3, "total_ions": 13, "coverage": 300 / 13, "matched_losses": 0}
     ]
 
 
@@ -125,3 +129,58 @@ def test_ensure_mirror_input_caches(tmp_path):
     os.utime(id_paths["identifications"], (future, future))
     _, rebuilt = ensure_mirror_input(paths, id_paths)
     assert rebuilt
+
+
+def test_ion_types_and_variant_names():
+    assert normalize_ion_types(["y", "a", "q"]) == ("a", "y")
+    assert normalize_ion_types(None) == ("b", "y")
+    assert variant_tag() == "" and variant_tag(["y", "b"]) == ""
+    assert variant_tag(["c", "z"], losses=True) == "cz_losses"
+    assert ion_types_label(["z", "c"]) == "c/z"
+    assert ion_label("y3-H2O1++") == "y3-H2O++"
+    assert ion_label("b8-H3N1+") == "b8-NH3+"
+    assert ion_label("y12+") == "y12+"
+
+
+def test_other_ion_types_and_losses():
+    ids, peaks = _example()
+    # a, c ions only: every ion name starts with a or c
+    mirror, _ = build_mirror_data(ids, peaks, ion_types=["a", "c"])
+    bottom = mirror.filter(pl.col("mirror_bottom_id") == 0)
+    tsg = _make_generator(["a", "c"])
+    _, names = theoretical_ions(tsg, "PEPTIDEK", 2)
+    assert names and {n[0] for n in names} == {"a", "c"}
+    assert bottom.height == len(names)
+
+    # With losses: loss ions are drawn at half height and counted apart
+    mirror, summary = build_mirror_data(ids, peaks, losses=True)
+    bottom = mirror.filter(pl.col("mirror_bottom_id") == 0)
+    top = mirror.filter(pl.col("mirror_top_id") == 0)
+    base = top["intensity"].max()
+    tsg = _make_generator(losses=True)
+    _, names = theoretical_ions(tsg, "PEPTIDEK", 2)
+    n_loss = sum("-" in n for n in names)
+    assert n_loss > 0 and bottom.height == len(names)
+    assert sorted(bottom["intensity"].unique().to_list()) == [base / 2, base]
+    row = summary.row(0, named=True)
+    assert row["total_ions"] == len(names) - n_loss == 13
+    assert row["matched_ions"] == 3
+
+
+def test_ensure_mirror_input_keeps_one_cache_per_choice(tmp_path):
+    ids, peaks = _example()
+    components = tmp_path / "components"
+    components.mkdir()
+    paths = {"spectrum_plot": components / "spectrum_plot.parquet"}
+    peaks.write_parquet(paths["spectrum_plot"])
+    id_paths = {"identifications": tmp_path / "identifications.parquet"}
+    ids.write_parquet(id_paths["identifications"])
+
+    default, _ = ensure_mirror_input(paths, id_paths)
+    other, rebuilt = ensure_mirror_input(paths, id_paths, ion_types=["a", "x"], losses=True)
+    assert rebuilt
+    assert default["mirror"].name == "mirror.parquet"
+    assert other["mirror"].name == "mirror_ax_losses.parquet"
+    assert other["summary"].name == "mirror_summary_ax_losses.parquet"
+    _, rebuilt = ensure_mirror_input(paths, id_paths, ion_types=["x", "a"], losses=True)
+    assert not rebuilt

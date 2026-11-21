@@ -1,7 +1,9 @@
 """Mirror view data: experimental spectrum against the theoretical spectrum of an ID.
 
 For every identification linked to a spectrum, pyOpenMS' TheoreticalSpectrumGenerator
-produces the b/y fragment ladder of the peptide. Each theoretical ion is matched to the
+produces the fragment ladder of the peptide: b/y ions by default, any of a/b/c/x/y/z on
+request, optionally with their neutral losses (H2O, NH3, and the side-chain losses of
+K/R/N/Q; drawn at half height). Each theoretical ion is matched to the
 nearest experimental peak within the search's fragment tolerance. The result is one
 parquet file that the Insight MirrorPlot reads:
 
@@ -10,17 +12,26 @@ parquet file that the Insight MirrorPlot reads:
 
 ``matched`` marks annotated peaks and ``label`` holds the ion names. Theoretical
 intensities are scaled to the base peak of the experimental spectrum so both halves
-share one axis. A second, small file holds the matched / total ion counts per ID.
+share one axis. A second, small file holds the matched / total ion counts per ID
+(ladder ions only; matched neutral-loss ions are counted apart).
+
+Each choice of ion types and losses is cached in files of its own, so switching back is
+instant; the default (b/y, no losses) keeps the names ``mirror.parquet`` and
+``mirror_summary.parquet``.
 """
 
+import re
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import numpy as np
 import polars as pl
 import pyopenms as oms
 
-ION_TYPES = ("b", "y")
+ALL_ION_TYPES = ("a", "b", "c", "x", "y", "z")
+ION_TYPES = ("b", "y")  # the default
+#: Height of a neutral-loss ion relative to the ladder ions in the theoretical half.
+LOSS_HEIGHT = 0.5
 MAX_FRAGMENT_CHARGE = 2
 
 MIRROR_SCHEMA = {
@@ -38,15 +49,45 @@ SUMMARY_SCHEMA = {
     "matched_ions": pl.Int64,
     "total_ions": pl.Int64,
     "coverage": pl.Float64,
+    "matched_losses": pl.Int64,
 }
 
 
-def get_mirror_paths(paths: dict) -> dict:
-    """Mirror cache files, next to the other component inputs of an mzML."""
+def normalize_ion_types(ion_types: Optional[Iterable[str]]) -> tuple:
+    """The chosen ion types in a/b/c/x/y/z order, unknown ones left out."""
+    chosen = set(ion_types if ion_types is not None else ION_TYPES)
+    return tuple(ion for ion in ALL_ION_TYPES if ion in chosen)
+
+
+def variant_tag(ion_types: Optional[Iterable[str]] = None, losses: bool = False) -> str:
+    """Name of a choice of ion types and losses in file names and cache ids ('' = default)."""
+    ions = normalize_ion_types(ion_types)
+    if ions == ION_TYPES and not losses:
+        return ""
+    return "".join(ions) + ("_losses" if losses else "")
+
+
+def ion_label(name: str) -> str:
+    """A readable ion name: ``y3-H2O1++`` becomes ``y3-H2O++``, ``b8-H3N1+`` ``b8-NH3+``."""
+    name = re.sub(r"([A-Z][a-z]?)1(?!\d)", r"\1", name)
+    return name.replace("-H3N", "-NH3")
+
+
+def ion_types_label(ion_types: Optional[Iterable[str]] = None) -> str:
+    """``b/y`` for the caption and the plot title."""
+    return "/".join(normalize_ion_types(ion_types))
+
+
+def get_mirror_paths(
+    paths: dict, ion_types: Optional[Iterable[str]] = None, losses: bool = False
+) -> dict:
+    """Mirror cache files of a choice of ion types, next to the other component inputs."""
     components_dir = Path(paths["spectrum_plot"]).parent
+    tag = variant_tag(ion_types, losses)
+    suffix = f"_{tag}" if tag else ""
     return {
-        "mirror": components_dir / "mirror.parquet",
-        "summary": components_dir / "mirror_summary.parquet",
+        "mirror": components_dir / f"mirror{suffix}.parquet",
+        "summary": components_dir / f"mirror_summary{suffix}.parquet",
     }
 
 
@@ -59,11 +100,15 @@ def mirror_cache_is_valid(mirror_paths: dict, identifications_path: Path) -> boo
         return False
 
 
-def _make_generator() -> oms.TheoreticalSpectrumGenerator:
+def _make_generator(
+    ion_types: Optional[Iterable[str]] = None, losses: bool = False
+) -> oms.TheoreticalSpectrumGenerator:
     tsg = oms.TheoreticalSpectrumGenerator()
     params = tsg.getParameters()
-    for ion in ("a", "b", "c", "x", "y", "z"):
-        params.setValue(f"add_{ion}_ions", "true" if ion in ION_TYPES else "false")
+    chosen = normalize_ion_types(ion_types)
+    for ion in ALL_ION_TYPES:
+        params.setValue(f"add_{ion}_ions", "true" if ion in chosen else "false")
+    params.setValue("add_losses", "true" if losses else "false")
     params.setValue("add_metainfo", "true")
     tsg.setParameters(params)
     return tsg
@@ -124,6 +169,8 @@ def build_mirror_data(
     peaks: pl.DataFrame,
     tolerance: float = 0.05,
     tolerance_ppm: bool = False,
+    ion_types: Optional[Iterable[str]] = None,
+    losses: bool = False,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build mirror rows and per-ID match summary.
 
@@ -132,6 +179,8 @@ def build_mirror_data(
         peaks: Peaks with scan_id, mass (m/z) and intensity.
         tolerance: Fragment mass tolerance.
         tolerance_ppm: Whether the tolerance is in ppm.
+        ion_types: Ion types of the theoretical ladder (default b and y).
+        losses: Whether to add the neutral losses of the ladder ions.
     """
     linked = id_df.filter(pl.col("scan_id") > 0).select("id_idx", "sequence", "charge", "scan_id")
     if linked.height == 0:
@@ -145,7 +194,7 @@ def build_mirror_data(
         .partition_by("scan_id", as_dict=True)
     )
 
-    tsg = _make_generator()
+    tsg = _make_generator(ion_types, losses)
     columns: dict[str, list] = {key: [] for key in MIRROR_SCHEMA}
     summary: dict[str, list] = {key: [] for key in SUMMARY_SCHEMA}
     next_peak_id = 0
@@ -155,6 +204,8 @@ def build_mirror_data(
         exp_mz = exp["mass"].to_numpy().astype(float) if exp is not None else np.empty(0)
         exp_int = exp["intensity"].to_numpy().astype(float) if exp is not None else np.empty(0)
         theo_mz, theo_names = theoretical_ions(tsg, sequence, charge)
+        theo_names = [ion_label(name) for name in theo_names]
+        is_loss = np.array(["-" in name for name in theo_names], dtype=bool)
         hits = match_ions(exp_mz, theo_mz, tolerance, tolerance_ppm)
 
         exp_labels: list[list[str]] = [[] for _ in range(len(exp_mz))]
@@ -170,18 +221,23 @@ def build_mirror_data(
         columns["mirror_top_id"].extend([id_idx] * n_exp + [-1] * n_theo)
         columns["mirror_bottom_id"].extend([-1] * n_exp + [id_idx] * n_theo)
         columns["mz"].extend(exp_mz.tolist() + theo_mz.tolist())
-        columns["intensity"].extend(exp_int.tolist() + [base_peak] * n_theo)
+        columns["intensity"].extend(
+            exp_int.tolist() + np.where(is_loss, base_peak * LOSS_HEIGHT, base_peak).tolist()
+        )
         columns["matched"].extend([bool(lbls) for lbls in exp_labels] + (hits >= 0).tolist())
         columns["label"].extend(
             [" / ".join(lbls) for lbls in exp_labels]
             + [name if hit >= 0 else "" for name, hit in zip(theo_names, hits)]
         )
 
-        matched = int((hits >= 0).sum())
+        ladder = ~is_loss
+        matched = int((hits[ladder] >= 0).sum())
+        total = int(ladder.sum())
         summary["id_idx"].append(id_idx)
         summary["matched_ions"].append(matched)
-        summary["total_ions"].append(n_theo)
-        summary["coverage"].append(100.0 * matched / n_theo if n_theo else 0.0)
+        summary["total_ions"].append(total)
+        summary["coverage"].append(100.0 * matched / total if total else 0.0)
+        summary["matched_losses"].append(int((hits[is_loss] >= 0).sum()))
 
     return (
         pl.DataFrame(columns, schema=MIRROR_SCHEMA),
@@ -194,12 +250,14 @@ def ensure_mirror_input(
     id_paths: dict,
     search_params: Optional[dict] = None,
     status_callback: Optional[Callable[[str], None]] = None,
+    ion_types: Optional[Iterable[str]] = None,
+    losses: bool = False,
 ) -> tuple[dict, bool]:
-    """Write the mirror cache if it is missing or older than the IDs.
+    """Write the mirror cache of a choice of ion types if it is missing or older than the IDs.
 
     Returns the mirror paths and whether the files were (re)written.
     """
-    mirror_paths = get_mirror_paths(paths)
+    mirror_paths = get_mirror_paths(paths, ion_types, losses)
     if mirror_cache_is_valid(mirror_paths, id_paths["identifications"]):
         return mirror_paths, False
 
@@ -213,6 +271,8 @@ def ensure_mirror_input(
         peaks,
         tolerance=float(params.get("fragment_mass_tolerance", 0.05)),
         tolerance_ppm=bool(params.get("fragment_mass_tolerance_ppm", False)),
+        ion_types=ion_types,
+        losses=losses,
     )
     mirror_df.write_parquet(mirror_paths["mirror"])
     summary_df.write_parquet(mirror_paths["summary"])
