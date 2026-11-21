@@ -22,6 +22,7 @@ from src.components.factory import (
     create_feature_table,
     create_mirror_plot,
 )
+from src.components.precursor_marker import precursor_markers, with_precursor
 from src.components.tool_panel import console_panel, operation_panel
 from src.export import export_table_selection, filtered_output_path, peak_window
 from src.preprocessing import ensure_chromatogram_input
@@ -183,9 +184,15 @@ def im_table(ctx: ViewerContext) -> None:
 
 def spectrum(ctx: ViewerContext) -> None:
     """The selected spectrum: plain, annotated with the selected identification,
-    or mirrored against its theoretical b/y ions."""
+    or mirrored against its theoretical b/y ions. A fragment spectrum marks
+    its precursor m/z."""
+    markers = precursor_markers(ctx.paths["metadata"], ctx.state_manager.get_selection("spectrum"))
+    prefix = f"{ctx.file_id}_" if ctx.file_id else ""
     if not ctx.has_ids:
-        ctx.ms_components["spectrum_plot"](
+        plot = with_precursor(
+            ctx.ms_components["spectrum_plot"], f"{prefix}spectrum_plot", ctx.cache_path, markers
+        )
+        plot(
             key=f"{ctx.file_key}_spectrum_plot", state_manager=ctx.state_manager, height=400
         )
         return
@@ -198,7 +205,13 @@ def spectrum(ctx: ViewerContext) -> None:
         label_visibility="collapsed",
     )
     if mode != "Mirror vs. theoretical":
-        ctx.id_components["annotated_spectrum_plot"](
+        plot = with_precursor(
+            ctx.id_components["annotated_spectrum_plot"],
+            f"{prefix}annotated_spectrum",
+            ctx.cache_path,
+            markers,
+        )
+        plot(
             key=f"{ctx.file_key}_spectrum_plot",
             state_manager=ctx.state_manager,
             height=400,
