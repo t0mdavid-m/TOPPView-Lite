@@ -31,7 +31,11 @@ from src.preprocessing.identification import (
     find_matching_idxml,
     load_search_params,
 )
-from src.preprocessing.component_inputs import create_spectra_table_with_ids
+from src.preprocessing.component_inputs import (
+    create_spectra_table_with_ids,
+    ensure_spectrum_summary,
+    spectra_table_is_current,
+)
 from src.preprocessing.features import find_matching_featurexml
 from src.components.factory import (
     create_ms_components,
@@ -89,6 +93,8 @@ preprocessed_files = []
 for mzml_file in sorted(mzML_dir.glob("*.mzML")):
     paths = get_cache_paths(st.session_state.workspace, mzml_file)
     if raw_cache_is_valid(mzml_file, paths) and component_cache_is_valid(paths):
+        # Files processed before the spectra table had its summary columns
+        ensure_spectrum_summary(paths)
         preprocessed_files.append(mzml_file)
 
 # Handle no files case
@@ -137,7 +143,7 @@ def load_context(selected_file: Path, index: int) -> ViewerContext:
         if id_cache_is_valid(idxml_path, id_paths):
             has_ids = True
             search_params = load_search_params(id_paths)
-            if not paths["spectra_table_with_ids"].exists():
+            if not spectra_table_is_current(paths["spectra_table_with_ids"]):
                 id_df = pl.read_parquet(id_paths["identifications"])
                 create_spectra_table_with_ids(paths, id_df, im_info)
 

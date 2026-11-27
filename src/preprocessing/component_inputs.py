@@ -20,6 +20,52 @@ def load_im_info(paths: dict) -> dict:
     return {"type": "none", "unit": ""}
 
 
+#: Per-spectrum summary columns of the spectra table, computed from its peaks
+SPECTRUM_SUMMARY_COLUMNS = ["tic", "base_peak_mz", "base_peak_intensity", "mz_min", "mz_max"]
+
+
+def spectra_table_is_current(path) -> bool:
+    """Whether a spectra table file holds the summary columns (older caches lack them)."""
+    try:
+        names = pl.read_parquet_schema(path).keys()
+    except Exception:
+        return False
+    return all(c in names for c in SPECTRUM_SUMMARY_COLUMNS)
+
+
+def spectrum_summary(peaks: pl.LazyFrame) -> pl.LazyFrame:
+    """TIC, base peak and m/z range of each spectrum, from its peaks above zero."""
+    return (
+        peaks.filter(pl.col("intensity") > 0)
+        .group_by("scan_id")
+        .agg(
+            pl.col("intensity").sum().cast(pl.Float64).alias("tic"),
+            pl.col("mass").sort_by("intensity").last().cast(pl.Float64).alias("base_peak_mz"),
+            pl.col("intensity").max().cast(pl.Float64).alias("base_peak_intensity"),
+            pl.col("mass").min().cast(pl.Float64).alias("mz_min"),
+            pl.col("mass").max().cast(pl.Float64).alias("mz_max"),
+        )
+    )
+
+
+def ensure_spectrum_summary(paths: dict) -> None:
+    """Add the summary columns to spectra tables written before they existed.
+
+    Cheaper than processing the file again: one pass over its peaks, and only
+    for a cache that lacks them.
+    """
+    targets = [p for p in (paths["spectra_table"], paths["spectra_table_with_ids"]) if p.exists()]
+    stale = [p for p in targets if not spectra_table_is_current(p)]
+    if not stale:
+        return
+    summary = spectrum_summary(
+        pl.scan_parquet(paths["peaks"]).select(["scan_id", "mass", "intensity"])
+    ).collect()
+    for path in stale:
+        table = pl.read_parquet(path).drop(SPECTRUM_SUMMARY_COLUMNS, strict=False)
+        table.join(summary, on="scan_id", how="left").write_parquet(path)
+
+
 def component_cache_is_valid(paths: dict) -> bool:
     """Check if component-specific cache files exist and are newer than raw cache."""
     # Check raw files exist first
@@ -92,8 +138,14 @@ def create_component_inputs(
     if has_im:
         spectra_cols.append("im_id")
 
-    pl.scan_parquet(paths["metadata"]).select(spectra_cols).collect().write_parquet(
-        paths["spectra_table"]
+    # With each spectrum's TIC, base peak and m/z range (empty for a spectrum without peaks)
+    summary = spectrum_summary(pl.scan_parquet(paths["peaks"]).select(["scan_id", "mass", "intensity"]))
+    (
+        pl.scan_parquet(paths["metadata"])
+        .select(spectra_cols)
+        .join(summary, on="scan_id", how="left")
+        .collect()
+        .write_parquet(paths["spectra_table"])
     )
 
     # Peaks table: columns for display + filter column (scan_id) + interactivity (peak_id)

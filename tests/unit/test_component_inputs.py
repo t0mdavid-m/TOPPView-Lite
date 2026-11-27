@@ -12,7 +12,15 @@ from src.preprocessing.component_inputs import (
     component_cache_is_valid,
     create_component_inputs,
     create_spectra_table_with_ids,
+    ensure_spectrum_summary,
+    SPECTRUM_SUMMARY_COLUMNS,
+    spectra_table_is_current,
 )
+
+
+def _current_spectra_table() -> pl.DataFrame:
+    """A spectra table with every column a current cache has."""
+    return pl.DataFrame({"scan_id": [1], **{c: [1.0] for c in SPECTRUM_SUMMARY_COLUMNS}})
 
 
 class TestLoadImInfo:
@@ -65,7 +73,7 @@ class TestComponentCacheIsValid:
         time.sleep(0.01)
 
         # Create component files (newer than raw)
-        pl.DataFrame({"scan_id": [1]}).write_parquet(populated_cache["spectra_table"])
+        _current_spectra_table().write_parquet(populated_cache["spectra_table"])
         pl.DataFrame({"peak_id": [1]}).write_parquet(populated_cache["peaks_table"])
         pl.DataFrame({"peak_id": [1]}).write_parquet(populated_cache["spectrum_plot"])
         pl.DataFrame({"peak_id": [1]}).write_parquet(populated_cache["heatmap_input"])
@@ -97,7 +105,7 @@ class TestComponentCacheIsValid:
         time.sleep(0.01)
 
         # Create component files except im_table
-        pl.DataFrame({"scan_id": [1]}).write_parquet(temp_cache_paths["spectra_table"])
+        _current_spectra_table().write_parquet(temp_cache_paths["spectra_table"])
         pl.DataFrame({"peak_id": [1]}).write_parquet(temp_cache_paths["peaks_table"])
         pl.DataFrame({"peak_id": [1]}).write_parquet(temp_cache_paths["spectrum_plot"])
         pl.DataFrame({"peak_id": [1]}).write_parquet(temp_cache_paths["heatmap_input"])
@@ -128,6 +136,54 @@ class TestCreateComponentInputs:
                         "precursor_mz", "charge", "num_peaks"]
         for col in expected_cols:
             assert col in df.columns
+
+    def test_spectra_table_summarises_each_spectrum(self, temp_cache_paths):
+        """TIC, base peak and m/z range come from the spectrum's peaks above zero."""
+        pl.DataFrame({
+            "scan_id": [1, 2], "name": ["s1", "s2"], "retention_time": [1.0, 2.0],
+            "ms_level": [1, 2], "precursor_mz": [0.0, 500.0], "charge": [0, 2],
+            "num_peaks": [3, 0],
+        }).write_parquet(temp_cache_paths["metadata"])
+        pl.DataFrame({
+            "peak_id": [1, 2, 3], "scan_id": [1, 1, 1], "mass": [100.0, 250.5, 900.0],
+            "intensity": [10.0, 30.0, 0.0], "retention_time": [1.0, 1.0, 1.0],
+        }).write_parquet(temp_cache_paths["peaks"])
+
+        create_component_inputs(temp_cache_paths)
+        df = pl.read_parquet(temp_cache_paths["spectra_table"]).sort("scan_id")
+
+        first = df.row(0, named=True)
+        assert first["tic"] == 40.0
+        assert first["base_peak_mz"] == 250.5
+        assert first["base_peak_intensity"] == 30.0
+        # The zero-intensity peak at 900 is not part of the range
+        assert (first["mz_min"], first["mz_max"]) == (100.0, 250.5)
+        # A spectrum without peaks keeps its row, with empty summary values
+        second = df.row(1, named=True)
+        assert second["scan_id"] == 2 and second["tic"] is None
+        assert spectra_table_is_current(temp_cache_paths["spectra_table"])
+
+    def test_older_caches_get_the_summary_columns(self, populated_cache):
+        """Spectra tables written before the summary columns existed get them in place."""
+        create_component_inputs(populated_cache)
+        current = pl.read_parquet(populated_cache["spectra_table"]).sort("scan_id")
+        old = current.drop(SPECTRUM_SUMMARY_COLUMNS)
+        old.write_parquet(populated_cache["spectra_table"])
+        old.with_columns(pl.lit(1).alias("num_ids")).write_parquet(
+            populated_cache["spectra_table_with_ids"]
+        )
+        assert not spectra_table_is_current(populated_cache["spectra_table"])
+
+        ensure_spectrum_summary(populated_cache)
+
+        for key in ("spectra_table", "spectra_table_with_ids"):
+            upgraded = pl.read_parquet(populated_cache[key]).sort("scan_id")
+            assert upgraded.select(SPECTRUM_SUMMARY_COLUMNS).equals(
+                current.select(SPECTRUM_SUMMARY_COLUMNS)
+            )
+        assert "num_ids" in pl.read_parquet(populated_cache["spectra_table_with_ids"]).columns
+        # The component cache stays valid: nothing has to be processed again
+        assert component_cache_is_valid(populated_cache) is True
 
     def test_peaks_table_filters_zero_intensity(self, populated_cache, sample_peaks_df):
         """Test that zero intensity peaks are filtered."""
