@@ -16,6 +16,34 @@ from src.common.plot_style import spectrum_styling
 # MirrorPlot needs disjoint identifiers for its two halves.
 MIRROR_BOTTOM_IDENTIFIER = "mirror_identification"
 
+# Cache ids of the spectra tables; a new suffix rebuilds caches made before
+# the tables had their summary columns
+SPECTRA_TABLE = "spectra_table_v2"
+SPECTRA_TABLE_WITH_IDS = "spectra_table_with_ids_v2"
+
+
+def _number(field: str, title: str, precision: int, width: int | None = None) -> dict:
+    column = {
+        "field": field,
+        "title": title,
+        "sorter": "number",
+        "formatter": "money",
+        "formatterParams": {"precision": precision, "symbol": ""},
+    }
+    if width:
+        column["width"] = width
+    return column
+
+
+# TIC, base peak and m/z range of each spectrum (see spectrum_summary)
+SUMMARY_COLUMNS = [
+    _number("tic", "TIC", 0),
+    _number("base_peak_mz", "Base peak m/z", 4),
+    _number("base_peak_intensity", "Base peak int.", 0),
+    _number("mz_min", "m/z from", 2),
+    _number("mz_max", "m/z to", 2),
+]
+
 # openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
 # SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
 # AttributeError. Remove once a release with t0mdavid-m/OpenMS-Insight#25 is required.
@@ -80,7 +108,7 @@ def create_ms_components(
     # Spectra Table (basic, without ID counts)
     spectra_filters = {"im_dimension": "im_id"} if use_im_filter else None
     spectra_table = Table(
-        cache_id=f"{prefix}spectra_table",
+        cache_id=f"{prefix}{SPECTRA_TABLE}",
         data_path=str(paths["spectra_table"]),
         cache_path=cache_path,
         filters=spectra_filters,
@@ -105,6 +133,7 @@ def create_ms_components(
             },
             {"field": "charge", "title": "z", "sorter": "number", "width": 50},
             {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
+            *SUMMARY_COLUMNS,
         ],
         title="Spectra",
         index_field="scan_id",
@@ -235,7 +264,7 @@ def create_id_components(
     # Spectra Table with ID counts
     spectra_filters = {"im_dimension": "im_id"} if use_im_filter else None
     spectra_table_with_ids = Table(
-        cache_id=f"{prefix}spectra_table_with_ids",
+        cache_id=f"{prefix}{SPECTRA_TABLE_WITH_IDS}",
         data_path=str(paths["spectra_table_with_ids"]),
         cache_path=cache_path,
         filters=spectra_filters,
@@ -261,6 +290,7 @@ def create_id_components(
             {"field": "charge", "title": "z", "sorter": "number", "width": 50},
             {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
             {"field": "num_ids", "title": "# IDs", "sorter": "number", "width": 60},
+            *SUMMARY_COLUMNS,
         ],
         title="Spectra",
         index_field="scan_id",
@@ -481,7 +511,7 @@ def reconstruct_ms_components(
         except Exception:
             pass  # IM table may not exist
 
-    spectra_table = Table(cache_id=f"{prefix}spectra_table", cache_path=cache_path)
+    spectra_table = Table(cache_id=f"{prefix}{SPECTRA_TABLE}", cache_path=cache_path)
     peaks_table = Table(cache_id=f"{prefix}peaks_table", cache_path=cache_path)
     spectrum_plot = LinePlot(cache_id=f"{prefix}spectrum_plot", cache_path=cache_path)
     heatmap = Heatmap(cache_id=f"{prefix}peaks_heatmap", cache_path=cache_path)
@@ -511,7 +541,7 @@ def reconstruct_id_components(
     prefix = f"{file_id}_" if file_id else ""
 
     spectra_table_with_ids = Table(
-        cache_id=f"{prefix}spectra_table_with_ids",
+        cache_id=f"{prefix}{SPECTRA_TABLE_WITH_IDS}",
         cache_path=cache_path
     )
     id_table = Table(cache_id=f"{prefix}id_table", cache_path=cache_path)
