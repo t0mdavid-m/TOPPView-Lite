@@ -185,6 +185,30 @@ class TestCreateComponentInputs:
         # The component cache stays valid: nothing has to be processed again
         assert component_cache_is_valid(populated_cache) is True
 
+    def test_faims_spectra_get_their_cv(self, populated_cache, sample_im_info_faims):
+        """FAIMS files: each spectrum's compensation voltage, also added to older caches."""
+        import json
+
+        pl.read_parquet(populated_cache["metadata"]).with_columns(
+            pl.Series("im_id", [0, 1, 2, 0, -1])
+        ).write_parquet(populated_cache["metadata"])
+        pl.read_parquet(populated_cache["peaks"]).with_columns(
+            pl.lit(0).alias("im_id")
+        ).write_parquet(populated_cache["peaks"])
+        with open(populated_cache["im_info"], "w") as f:
+            json.dump(sample_im_info_faims, f)
+
+        create_component_inputs(populated_cache)
+        df = pl.read_parquet(populated_cache["spectra_table"]).sort("scan_id")
+        assert df["cv"].to_list() == [-35.0, -45.0, -55.0, -35.0, None]
+        assert spectra_table_is_current(populated_cache["spectra_table"], sample_im_info_faims)
+
+        df.drop("cv").write_parquet(populated_cache["spectra_table"])
+        assert not spectra_table_is_current(populated_cache["spectra_table"], sample_im_info_faims)
+        ensure_spectrum_summary(populated_cache)
+        upgraded = pl.read_parquet(populated_cache["spectra_table"]).sort("scan_id")
+        assert upgraded["cv"].to_list() == [-35.0, -45.0, -55.0, -35.0, None]
+
     def test_peaks_table_filters_zero_intensity(self, populated_cache, sample_peaks_df):
         """Test that zero intensity peaks are filtered."""
         # Add a zero intensity peak
@@ -334,6 +358,31 @@ class TestCreateSpectraTableWithIds:
 
         # All spectra should have 0 IDs
         assert df["num_ids"].sum() == 0
+
+    def test_first_identification_of_each_spectrum(self, populated_cache, sample_im_info_none):
+        """Sequence and score come from the first identification (idXML order) of a spectrum."""
+        create_component_inputs(populated_cache)
+        id_df = pl.DataFrame({
+            "id_idx": [3, 0, 1, 2],
+            "scan_id": [2, 2, 4, -1],
+            "sequence": ["LATER", "FIRST", "OTHER", "UNMATCHED"],
+            "score": [0.5, 0.9, 12.0, 1.0],
+        })
+
+        create_spectra_table_with_ids(populated_cache, id_df, sample_im_info_none)
+
+        df = pl.read_parquet(populated_cache["spectra_table_with_ids"]).sort("scan_id")
+        rows = {r["scan_id"]: r for r in df.iter_rows(named=True)}
+        assert (rows[2]["sequence"], rows[2]["score"]) == ("FIRST", 0.9)
+        assert (rows[4]["sequence"], rows[4]["score"]) == ("OTHER", 12.0)
+        assert rows[1]["sequence"] is None and rows[1]["score"] is None
+        assert spectra_table_is_current(
+            populated_cache["spectra_table_with_ids"], sample_im_info_none, with_ids=True
+        )
+        # A table written before these columns existed is not current
+        assert not spectra_table_is_current(
+            populated_cache["spectra_table"], sample_im_info_none, with_ids=True
+        )
 
     def test_status_callback_called(self, populated_cache, sample_id_df, sample_im_info_none):
         """Test that status callback is invoked."""

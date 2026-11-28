@@ -17,9 +17,9 @@ from src.common.plot_style import spectrum_styling
 MIRROR_BOTTOM_IDENTIFIER = "mirror_identification"
 
 # Cache ids of the spectra tables; a new suffix rebuilds caches made before
-# the tables had their summary columns
-SPECTRA_TABLE = "spectra_table_v2"
-SPECTRA_TABLE_WITH_IDS = "spectra_table_with_ids_v2"
+# the tables had their summary, CV and first identification columns
+SPECTRA_TABLE = "spectra_table_v3"
+SPECTRA_TABLE_WITH_IDS = "spectra_table_with_ids_v3"
 
 
 def _number(field: str, title: str, precision: int, width: int | None = None) -> dict:
@@ -43,6 +43,23 @@ SUMMARY_COLUMNS = [
     _number("mz_min", "m/z from", 2),
     _number("mz_max", "m/z to", 2),
 ]
+
+# Sequence and score of each spectrum's first identification
+FIRST_ID_COLUMNS = [
+    {"field": "sequence", "title": "Sequence", "hozAlign": "left",
+     "headerTooltip": "First identification of the spectrum"},
+    {"field": "score", "title": "Score", "sorter": "number", "width": 80,
+     "headerTooltip": "Score of the first identification",
+     # Empty for spectra without one; long values rounded to 4 decimals
+     "formatter": "fixed", "formatterParams": {"precision": 4, "minLength": 6}},
+]
+
+
+def _cv_columns(im_info: dict) -> list:
+    """The compensation voltage column, for FAIMS files."""
+    if im_info.get("type") != "faims":
+        return []
+    return [_number("cv", f"CV ({im_info.get('unit', '').strip() or 'V'})", 1, width=70)]
 
 # openms-insight 0.4.0 calls _get_render_key() on every rendered component, but
 # SequenceView does not subclass BaseComponent and lacks it, so rendering it raises
@@ -133,6 +150,7 @@ def create_ms_components(
             },
             {"field": "charge", "title": "z", "sorter": "number", "width": 50},
             {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
+            *_cv_columns(im_info),
             *SUMMARY_COLUMNS,
         ],
         title="Spectra",
@@ -290,6 +308,8 @@ def create_id_components(
             {"field": "charge", "title": "z", "sorter": "number", "width": 50},
             {"field": "num_peaks", "title": "# Peaks", "sorter": "number", "width": 80},
             {"field": "num_ids", "title": "# IDs", "sorter": "number", "width": 60},
+            *FIRST_ID_COLUMNS,
+            *_cv_columns(im_info),
             *SUMMARY_COLUMNS,
         ],
         title="Spectra",

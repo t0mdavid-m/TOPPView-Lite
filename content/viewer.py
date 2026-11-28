@@ -93,7 +93,7 @@ preprocessed_files = []
 for mzml_file in sorted(mzML_dir.glob("*.mzML")):
     paths = get_cache_paths(st.session_state.workspace, mzml_file)
     if raw_cache_is_valid(mzml_file, paths) and component_cache_is_valid(paths):
-        # Files processed before the spectra table had its summary columns
+        # Files processed before the spectra table had its summary (and FAIMS CV) columns
         ensure_spectrum_summary(paths)
         preprocessed_files.append(mzml_file)
 
@@ -143,7 +143,7 @@ def load_context(selected_file: Path, index: int) -> ViewerContext:
         if id_cache_is_valid(idxml_path, id_paths):
             has_ids = True
             search_params = load_search_params(id_paths)
-            if not spectra_table_is_current(paths["spectra_table_with_ids"]):
+            if not spectra_table_is_current(paths["spectra_table_with_ids"], im_info, with_ids=True):
                 id_df = pl.read_parquet(id_paths["identifications"])
                 create_spectra_table_with_ids(paths, id_df, im_info)
 
