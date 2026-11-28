@@ -23,14 +23,42 @@ def load_im_info(paths: dict) -> dict:
 #: Per-spectrum summary columns of the spectra table, computed from its peaks
 SPECTRUM_SUMMARY_COLUMNS = ["tic", "base_peak_mz", "base_peak_intensity", "mz_min", "mz_max"]
 
+#: Columns of the spectra table with IDs taken from each spectrum's first identification
+FIRST_ID_COLUMNS = ["sequence", "score"]
 
-def spectra_table_is_current(path) -> bool:
-    """Whether a spectra table file holds the summary columns (older caches lack them)."""
+
+def is_faims(im_info: Optional[dict]) -> bool:
+    """Whether the file's ion mobility dimension is a FAIMS compensation voltage."""
+    return bool(im_info) and im_info.get("type") == "faims"
+
+
+def faims_cv(im_info: dict) -> pl.Expr:
+    """Compensation voltage of each spectrum, looked up from its ``im_id``."""
+    values = [float(v) for v in im_info.get("unique_values", [])]
+    return (
+        pl.col("im_id")
+        .replace_strict(list(range(len(values))), values, default=None, return_dtype=pl.Float64)
+        .alias("cv")
+    )
+
+
+def spectra_table_columns(im_info: Optional[dict] = None, with_ids: bool = False) -> list:
+    """Columns a current spectra table has beyond the spectrum metadata."""
+    columns = list(SPECTRUM_SUMMARY_COLUMNS)
+    if is_faims(im_info):
+        columns.append("cv")
+    if with_ids:
+        columns += FIRST_ID_COLUMNS
+    return columns
+
+
+def spectra_table_is_current(path, im_info: Optional[dict] = None, with_ids: bool = False) -> bool:
+    """Whether a spectra table file holds every current column (older caches lack some)."""
     try:
         names = pl.read_parquet_schema(path).keys()
     except Exception:
         return False
-    return all(c in names for c in SPECTRUM_SUMMARY_COLUMNS)
+    return all(c in names for c in spectra_table_columns(im_info, with_ids))
 
 
 def spectrum_summary(peaks: pl.LazyFrame) -> pl.LazyFrame:
@@ -48,22 +76,27 @@ def spectrum_summary(peaks: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
-def ensure_spectrum_summary(paths: dict) -> None:
-    """Add the summary columns to spectra tables written before they existed.
+def ensure_spectrum_summary(paths: dict, im_info: Optional[dict] = None) -> None:
+    """Add the summary (and FAIMS CV) columns to spectra tables written before they existed.
 
     Cheaper than processing the file again: one pass over its peaks, and only
     for a cache that lacks them.
     """
+    if im_info is None:
+        im_info = load_im_info(paths)
     targets = [p for p in (paths["spectra_table"], paths["spectra_table_with_ids"]) if p.exists()]
-    stale = [p for p in targets if not spectra_table_is_current(p)]
+    stale = [p for p in targets if not spectra_table_is_current(p, im_info)]
     if not stale:
         return
     summary = spectrum_summary(
         pl.scan_parquet(paths["peaks"]).select(["scan_id", "mass", "intensity"])
     ).collect()
     for path in stale:
-        table = pl.read_parquet(path).drop(SPECTRUM_SUMMARY_COLUMNS, strict=False)
-        table.join(summary, on="scan_id", how="left").write_parquet(path)
+        table = pl.read_parquet(path).drop(SPECTRUM_SUMMARY_COLUMNS + ["cv"], strict=False)
+        table = table.join(summary, on="scan_id", how="left")
+        if is_faims(im_info) and "im_id" in table.columns:
+            table = table.with_columns(faims_cv(im_info))
+        table.write_parquet(path)
 
 
 def component_cache_is_valid(paths: dict) -> bool:
@@ -140,13 +173,11 @@ def create_component_inputs(
 
     # With each spectrum's TIC, base peak and m/z range (empty for a spectrum without peaks)
     summary = spectrum_summary(pl.scan_parquet(paths["peaks"]).select(["scan_id", "mass", "intensity"]))
-    (
-        pl.scan_parquet(paths["metadata"])
-        .select(spectra_cols)
-        .join(summary, on="scan_id", how="left")
-        .collect()
-        .write_parquet(paths["spectra_table"])
-    )
+    spectra = pl.scan_parquet(paths["metadata"]).select(spectra_cols).join(summary, on="scan_id", how="left")
+    # FAIMS: the compensation voltage of each spectrum
+    if is_faims(im_info):
+        spectra = spectra.with_columns(faims_cv(im_info))
+    spectra.collect().write_parquet(paths["spectra_table"])
 
     # Peaks table: columns for display + filter column (scan_id) + interactivity (peak_id)
     if status_callback:
@@ -249,7 +280,8 @@ def create_spectra_table_with_ids(
     """Create spectra table with identification counts column.
 
     This creates a variant of spectra_table that includes a 'num_ids' column
-    showing how many identifications are linked to each spectrum.
+    showing how many identifications are linked to each spectrum, and the
+    sequence and score of its first identification (in idXML order).
 
     Args:
         paths: Dictionary of cache paths from get_cache_paths()
@@ -269,9 +301,22 @@ def create_spectra_table_with_ids(
         .agg(pl.len().alias("num_ids"))
     )
 
+    # Sequence and score of each spectrum's first identification
+    first_id = (
+        id_df.filter(pl.col("scan_id") > 0)
+        .sort("id_idx" if "id_idx" in id_df.columns else "scan_id")
+        .group_by("scan_id", maintain_order=True)
+        .agg(
+            pl.col(c).first() if c in id_df.columns else pl.lit(None).alias(c)
+            for c in FIRST_ID_COLUMNS
+        )
+        .with_columns(pl.col("sequence").cast(pl.Utf8), pl.col("score").cast(pl.Float64))
+    )
+
     # Read base spectra table and join with id counts
-    spectra_df = pl.read_parquet(paths["spectra_table"])
+    spectra_df = pl.read_parquet(paths["spectra_table"]).drop(FIRST_ID_COLUMNS, strict=False)
     spectra_df = spectra_df.join(id_counts, on="scan_id", how="left")
+    spectra_df = spectra_df.join(first_id, on="scan_id", how="left")
     spectra_df = spectra_df.with_columns(
         pl.col("num_ids").fill_null(0).cast(pl.Int32)
     )
